@@ -3,7 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 data = yf.download("AAPL", start="2018-01-01", end="2025-01-01", auto_adjust=True)
-
 data["returns"] = data["Close"].pct_change()
 
 data["momentum_long"] = data["Close"].pct_change(20)
@@ -27,9 +26,8 @@ rolling_max = cumulative.cummax()
 drawdown = cumulative / rolling_max - 1
 data["drawdown"] = drawdown
 
-drawdown_limit = -0.2      
-momentum_threshold = 0     
-
+drawdown_limit = -0.2
+momentum_threshold = 0
 position_filtered = []
 trading_allowed = True
 
@@ -51,6 +49,24 @@ trades_filtered = data["position_filtered"].diff().abs()
 trade_costs_filtered = trades_filtered * cost_rate
 data["strategy_filtered_net"] = data["strategy_filtered"] - trade_costs_filtered
 
-(1 + data[["returns", "net_strategy", "strategy_filtered_net"]]).cumprod().plot(figsize=(10,6))
-plt.title("Apple Multi-Horizon Momentum Strategy with Costs & Drawdown/Momentum Filter")
+spy = yf.download("SPY", start="2018-01-01", end="2025-01-01", auto_adjust=True)
+spy["returns"] = spy["Close"].pct_change()
+spy_cum = (1 + spy["returns"]).cumprod()
+
+data["AAPL_hold"] = (1 + data["returns"]).cumprod()
+
+combined = (1 + data[["strategy", "net_strategy", "strategy_filtered_net"]]).cumprod()
+combined["SPY"] = spy_cum
+combined["AAPL_hold"] = data["AAPL_hold"]
+
+combined.plot(figsize=(12,6))
+plt.title("AAPL Momentum Strategy vs SPY & Buy-and-Hold")
+plt.ylabel("Cumulative Returns")
+plt.legend([
+    "Strategy",
+    "Strategy w/ Costs",
+    "Strategy w/ Costs & Filter",
+    "SPY",
+    "Buy-and-Hold"
+])
 plt.show()
