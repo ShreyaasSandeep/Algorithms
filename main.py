@@ -13,9 +13,17 @@ data["signal_long"] = data["momentum_long"] / vol
 data["signal_short"] = data["momentum_short"] / vol
 
 data["combined_signal"] = 0.5 * data["signal_long"] + 0.5 * data["signal_short"]
-data["position"] = data["combined_signal"].clip(-0.2, 0.2) / 0.2
+
+data["position"] = data["combined_signal"].clip(-0.5, 0.5) / 0.5
+
 data["strategy"] = data["position"].shift(1) * data["returns"]
 
-(1 + data[["returns", "strategy"]]).cumprod().plot(figsize=(10,6))
-plt.title("Multi-Horizon Momentum Strategy vs Buy & Hold (AAPL)")
+cost_rate = 0.001
+trades = data["position"].diff().abs()
+trade_costs = trades * cost_rate
+
+data["strategy_after_costs"] = data["strategy"] - trade_costs
+
+(1 + data[["returns", "strategy", "strategy_after_costs"]]).cumprod().plot(figsize=(10,6))
+plt.title("Apple Multi-Horizon Momentum Strategy vs Buy & Hold")
 plt.show()
