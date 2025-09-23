@@ -7,35 +7,28 @@ data["returns"] = data["Close"].pct_change()
 
 data["momentum_long"] = data["Close"].pct_change(20)
 data["momentum_short"] = data["Close"].pct_change(5)
-vol = data["returns"].rolling(40).std()
+vol = data["returns"].rolling(20).std()
 data["signal_long"] = data["momentum_long"] / vol
 data["signal_short"] = data["momentum_short"] / vol
-data["combined_signal"] = 0.7 * data["signal_long"] + 0.3 * data["signal_short"]
+data["combined_signal"] = 0.5 * data["signal_long"] + 0.5 * data["signal_short"]
 
 data["position"] = data["combined_signal"].clip(-0.5, 0.5) / 0.5
 
 data["strategy"] = data["position"].shift(1) * data["returns"]
-
 cost_rate = 0.001
 trades = data["position"].diff().abs()
 trade_costs = trades * cost_rate
 data["net_strategy"] = data["strategy"] - trade_costs
 
-cumulative = (1 + data["net_strategy"]).cumprod()
-rolling_max = cumulative.cummax()
-drawdown = cumulative / rolling_max - 1
-data["drawdown"] = drawdown
-
-drawdown_limit = -0.2
-momentum_threshold = 0
+momentum_threshold = 0.5
 position_filtered = []
 trading_allowed = True
 
 for i in range(len(data)):
-    if drawdown.iloc[i] < drawdown_limit:
-        trading_allowed = False
+    if data["combined_signal"].iloc[i] < momentum_threshold:
+        trading_allowed = False   
     elif data["combined_signal"].iloc[i] > momentum_threshold:
-        trading_allowed = True
+        trading_allowed = True    
 
     if trading_allowed:
         position_filtered.append(data["position"].iloc[i])
@@ -64,8 +57,8 @@ plt.title("AAPL Momentum Strategy vs SPY & Buy-and-Hold")
 plt.ylabel("Cumulative Returns")
 plt.legend([
     "Strategy",
-    "Strategy w/ Costs",
-    "Strategy w/ Costs & Filter",
+    "Strategy + Costs",
+    "Strategy + Costs and Momentum Filter",
     "SPY",
     "Buy-and-Hold"
 ])
