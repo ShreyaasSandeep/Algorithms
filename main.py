@@ -22,37 +22,22 @@ data["combined_signal"] = 0.5 * data["signal_long"] + 0.5 * data["signal_short"]
 data["position"] = data["combined_signal"].clip(-0.5, 0.5) / 0.5
 
 momentum_threshold = 0.5
-position_filtered = []
-trading_allowed = True
-
-for i in range(len(data)):
-    if data["combined_signal"].iloc[i] < momentum_threshold:
-        trading_allowed = False
-    elif data["combined_signal"].iloc[i] > momentum_threshold:
-        trading_allowed = True
-
-    if trading_allowed:
-        position_filtered.append(data["position"].iloc[i])
-    else:
-        position_filtered.append(0)
-
-data["position_filtered"] = position_filtered
+data["trading_allowed"] = (data["combined_signal"] > momentum_threshold).astype(int)
+data["position_filtered"] = data["position"] * data["trading_allowed"]
 
 data["SMA_200"] = data["Close"].rolling(window=200).mean()
 data = data.dropna(subset=["SMA_200"])
 
-data["sma_filter"] = np.where(data["Close"] > data["SMA_200"], 1, 0)
+data["sma_filter"] = np.where(data["Close"] > data["SMA_200"], 1, 0.5)
 
 data["position_filtered_sma"] = data["position_filtered"] * data["sma_filter"]
 
-cost_rate = 0.001
-
+cost_rate = 0.001 
 
 data["strategy"] = data["position"].shift(1) * data["returns"]
 trades = data["position"].diff().abs()
 trade_costs = trades * cost_rate
 data["net_strategy"] = data["strategy"] - trade_costs
-
 
 data["strategy_filtered_sma"] = data["position_filtered_sma"].shift(1) * data["returns"]
 trades_filtered_sma = data["position_filtered_sma"].diff().abs()
@@ -73,8 +58,20 @@ combined = pd.DataFrame({
     "SPY Buy-and-Hold": spy_cum
 })
 
-combined.plot(figsize=(12,6))
-plt.title("AAPL Momentum Strategy with Momentum Threshold + 200-Day SMA vs SPY")
-plt.ylabel("Cumulative Returns")
+combined.plot(figsize=(12,6), logy=True)
+plt.title("AAPL Momentum Strategy with Threshold + 200-Day SMA vs SPY")
+plt.ylabel("Cumulative Log Returns")
 plt.legend()
 plt.show()
+
+def performance_summary(series):
+    ret = series.pct_change().dropna()
+    annual_return = (1 + ret.mean())**252 - 1
+    annual_vol = ret.std() * np.sqrt(252)
+    return pd.Series({
+        "Annual Return": annual_return,
+        "Annual Volatility": annual_vol
+    })
+
+print("Performance Summary (Net Strategy with Filters):")
+print(performance_summary(combined["Strategy + Costs + Filters"]))
