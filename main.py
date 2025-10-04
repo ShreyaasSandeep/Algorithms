@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 data = yf.download("AAPL", start="2018-01-01", end="2025-01-01", auto_adjust=True)
+
 if isinstance(data.columns, pd.MultiIndex):
     data.columns = [col[0] for col in data.columns]
 
@@ -12,8 +13,15 @@ data["returns"] = data["Close"].pct_change()
 data["momentum_long"] = data["Close"].pct_change(20)
 data["momentum_short"] = data["Close"].pct_change(5)
 
-data["signal_long"] = (data["momentum_long"] - data["momentum_long"].rolling(20).mean()) / data["momentum_long"].rolling(20).std()
-data["signal_short"] = (data["momentum_short"] - data["momentum_short"].rolling(5).mean()) / data["momentum_short"].rolling(5).std()
+data["signal_short"] = (data["momentum_short"] - data["momentum_short"].mean()) / data["momentum_short"].std()
+data["signal_long"] = (data["momentum_long"] - data["momentum_long"].mean()) / data["momentum_long"].std()
+
+data["signal_short"] = data["signal_short"].ewm(span=20).mean()
+data["signal_long"] = data["signal_long"].ewm(span=60).mean()
+
+z_clip = 3.0
+data["signal_short"] = data["signal_short"].clip(-z_clip, z_clip)
+data["signal_long"] = data["signal_long"].clip(-z_clip, z_clip)
 
 rolling_window = 252
 
@@ -28,7 +36,8 @@ weight_long = sharpe_long / total_sharpe
 
 data["combined_signal"] = weight_short * data["signal_short"] + weight_long * data["signal_long"]
 
-data["position"] = data["combined_signal"].clip(-0.01, 0.01) / 0.01
+data["position"] = data["combined_signal"] / data["combined_signal"].abs().rolling(252).max()
+data["position"] = data["position"].clip(-0.5, 0.5) / 0.5
 
 momentum_threshold = 0
 data["trading_allowed"] = (data["combined_signal"] > momentum_threshold).astype(int)
@@ -64,7 +73,7 @@ combined = pd.DataFrame({
     "SPY Buy-and-Hold": spy_cum
 })
 
-combined.plot(figsize=(12,6), logy=True)
+combined.plot(figsize=(12, 6), logy=True)
 plt.title("AAPL Momentum Strategy vs SPY vs Buy and Hold")
 plt.ylabel("Cumulative Log Returns")
 plt.legend()
@@ -72,12 +81,21 @@ plt.show()
 
 def performance_summary(series):
     ret = series.pct_change().dropna()
-    annual_return = (1 + ret.mean())**252 - 1
+    cumulative = (1 + ret).cumprod()
+    annual_return = cumulative.iloc[-1] ** (252 / len(ret)) - 1
     annual_vol = ret.std() * np.sqrt(252)
+    sharpe = annual_return / annual_vol
+    max_dd = (1 - cumulative / cumulative.cummax()).max()
+    win_rate = (ret > 0).mean()
+
     return pd.Series({
-        "Annual Return": annual_return,
-        "Annual Volatility": annual_vol
+        "CAGR": annual_return,
+        "Volatility": annual_vol,
+        "Sharpe": sharpe,
+        "Max Drawdown": max_dd,
+        "Win Rate": win_rate
     })
 
-print("Performance Summary (Final Iteration):")
+
+print("Performance Summary:")
 print(performance_summary(combined["Strategy + Costs + Filters"]))
