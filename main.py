@@ -1,17 +1,39 @@
-import yfinance as yf
-import numpy as np
+import alpaca_trade_api as tradeapi
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 
+API_KEY = "PKOYSXCCALC4OTPQ146W"
+API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
+BASE_URL = "https://paper-api.alpaca.markets/v2"
 
-def multi_ticker_momentum_dynamic(tickers, start="2018-01-01", end="2025-01-01",
+api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+
+def fetch_alpaca_data(ticker, start, end, timeframe='1D'):
+    start_dt = pd.to_datetime(start)
+    end_dt = pd.to_datetime(end)
+
+    barset = api.get_bars(
+        symbol=ticker,
+        timeframe=timeframe,
+        start=start_dt.strftime('%Y-%m-%d'),
+        end=end_dt.strftime('%Y-%m-%d'),
+        adjustment='all'
+    ).df
+
+    if 'symbol' in barset.columns:
+        barset = barset[barset['symbol'] == ticker]
+
+    barset = barset[['open', 'high', 'low', 'close', 'volume']]
+    barset.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}, inplace=True)
+    return barset
+
+def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
                                   target_vol=0.3, cost_rate=0.001, slippage_rate=0.0005,
                                   vol_lookback=20, plot=True):
-    def single_momentum(ticker):
-        data = yf.download(ticker, start=start, end=end, auto_adjust=True)
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = [col[0] for col in data.columns]
 
+    def single_momentum(ticker):
+        data = fetch_alpaca_data(ticker, start, end)
         data["returns"] = data["Close"].pct_change()
         data["momentum_long"] = data["Close"].pct_change(20)
         data["momentum_short"] = data["Close"].pct_change(5)
@@ -107,9 +129,9 @@ def multi_ticker_momentum_dynamic(tickers, start="2018-01-01", end="2025-01-01",
     portfolio_returns = (strategy_returns * rolling_weights.shift(1)).sum(axis=1)
     portfolio_cum = (1 + portfolio_returns).cumprod()
 
-    spy = yf.download("SPY", start=start, end=end, auto_adjust=True)
-    spy["returns"] = spy["Close"].pct_change()
-    spy_cum = (1 + spy["returns"]).cumprod()
+    spy_data = fetch_alpaca_data("SPY", start, end)
+    spy_data["returns"] = spy_data["Close"].pct_change()
+    spy_cum = (1 + spy_data["returns"]).cumprod()
 
     def performance_summary(series):
         ret = series.pct_change().dropna()
@@ -129,14 +151,10 @@ def multi_ticker_momentum_dynamic(tickers, start="2018-01-01", end="2025-01-01",
 
     summary = performance_summary(portfolio_cum)
 
-    bh_data = {}
-    for t in tickers:
-        temp = yf.download(t, start=start, end=end, auto_adjust=True)
-        temp["returns"] = temp["Close"].pct_change()
-        bh_data[t] = temp["returns"]
-    bh_returns = pd.DataFrame(bh_data).dropna()
-    bh_portfolio_returns = bh_returns.mean(axis=1)
-    bh_portfolio_cum = (1 + bh_portfolio_returns).cumprod()
+    bh_data = pd.DataFrame({t: fetch_alpaca_data(t, start, end)["Close"].pct_change() for t in tickers}).dropna()
+    bh_portfolio_cum = (1 + bh_data.mean(axis=1)).cumprod()
+    summary_bh = performance_summary(bh_portfolio_cum)
+    summary_spy = performance_summary(spy_cum)
 
     if plot:
         pd.DataFrame({
@@ -147,9 +165,6 @@ def multi_ticker_momentum_dynamic(tickers, start="2018-01-01", end="2025-01-01",
                 title="Momentum Portfolio Strategy vs Equal-Weight Buy and Hold vs SPY")
         plt.show()
 
-    summary_bh = performance_summary(bh_portfolio_cum)
-    summary_spy = performance_summary(spy_cum)
-
     print("Momentum Portfolio Summary:\n", summary)
     print("\nEqual-Weight Buy-and-Hold Summary:\n", summary_bh)
     print("\nSPY Buy-and-Hold Summary:\n", summary_spy)
@@ -158,5 +173,4 @@ def multi_ticker_momentum_dynamic(tickers, start="2018-01-01", end="2025-01-01",
 
 
 tickers = ["AAPL", "GOOG", "IBM", "MSFT", "AMZN"]
-portfolio_cum, summary, rolling_weights = multi_ticker_momentum_dynamic(tickers)
-print(summary)
+portfolio_cum, summary, rolling_weights = multi_ticker_momentum_alpaca(tickers)
