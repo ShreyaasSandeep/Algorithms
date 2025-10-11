@@ -9,31 +9,39 @@ BASE_URL = "https://paper-api.alpaca.markets/v2"
 
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
-def fetch_alpaca_data(ticker, start, end, timeframe='1D'):
-    start_dt = pd.to_datetime(start)
-    end_dt = pd.to_datetime(end)
+def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D'):
+    all_bars = []
 
-    barset = api.get_bars(
-        symbol=ticker,
-        timeframe=timeframe,
-        start=start_dt.strftime('%Y-%m-%d'),
-        end=end_dt.strftime('%Y-%m-%d'),
-        adjustment='all'
-    ).df
+    for ticker in tickers:
+        barset = api.get_bars(
+            symbol=ticker,
+            timeframe=timeframe,
+            start=pd.to_datetime(start).strftime('%Y-%m-%d'),
+            end=pd.to_datetime(end).strftime('%Y-%m-%d'),
+            adjustment='all'
+        ).df
 
-    if 'symbol' in barset.columns:
-        barset = barset[barset['symbol'] == ticker]
+        if not barset.empty:
+            barset['symbol'] = ticker
+            all_bars.append(barset)
 
-    barset = barset[['open', 'high', 'low', 'close', 'volume']]
-    barset.rename(columns={'open':'Open','high':'High','low':'Low','close':'Close','volume':'Volume'}, inplace=True)
-    return barset
+    barset_all = pd.concat(all_bars)
+    barset_all = barset_all.reset_index()
+    barset_all['timestamp'] = pd.to_datetime(barset_all['timestamp'])
+    return barset_all
 
-def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
+def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-01",
                                   target_vol=0.3, cost_rate=0.001, slippage_rate=0.0005,
                                   vol_lookback=20, plot=True):
 
+    all_data = fetch_alpaca_data_batch(tickers, start, end)
+
     def single_momentum(ticker):
-        data = fetch_alpaca_data(ticker, start, end)
+        data = all_data[all_data['symbol'] == ticker].copy()
+        data = data[['timestamp','open','high','low','close','volume']]
+        data.columns = ["Date","Open","High","Low","Close","Volume"]
+        data.set_index("Date", inplace=True)
+
         data["returns"] = data["Close"].pct_change()
         data["momentum_long"] = data["Close"].pct_change(20)
         data["momentum_short"] = data["Close"].pct_change(5)
@@ -86,7 +94,6 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
             elif sig < lower_threshold:
                 position = 0.5
             positions_hysteresis.append(position)
-
         data["position_hysteresis"] = np.array(positions_hysteresis)
 
         data["SMA_200"] = data["Close"].rolling(window=200).mean()
@@ -108,7 +115,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
         scaling = (target_vol / realized_vol).clip(0, 3)
         data["position_scaled"] = data["position_filtered"] * scaling
 
-        vol_threshold = 0.3
+        vol_threshold = 0.5
         data["vol_filter"] = np.where(realized_vol < vol_threshold, 1, 0.5)
         data["position_final"] = data["position_scaled"] * data["vol_filter"]
 
@@ -125,11 +132,13 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
     rolling_vol = strategy_returns.rolling(vol_lookback).std() * np.sqrt(252)
     rolling_weights = 1 / rolling_vol
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
-
     portfolio_returns = (strategy_returns * rolling_weights.shift(1)).sum(axis=1)
     portfolio_cum = (1 + portfolio_returns).cumprod()
 
-    spy_data = fetch_alpaca_data("SPY", start, end)
+    spy_data = fetch_alpaca_data_batch(["SPY"], start, end)
+    spy_data = spy_data[spy_data['symbol']=='SPY'][['timestamp','close']].copy()
+    spy_data.columns = ["Date","Close"]
+    spy_data.set_index("Date", inplace=True)
     spy_data["returns"] = spy_data["Close"].pct_change()
     spy_cum = (1 + spy_data["returns"]).cumprod()
 
@@ -151,7 +160,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
 
     summary = performance_summary(portfolio_cum)
 
-    bh_data = pd.DataFrame({t: fetch_alpaca_data(t, start, end)["Close"].pct_change() for t in tickers}).dropna()
+    bh_data = pd.DataFrame({t: fetch_alpaca_data_batch([t], start, end).set_index('timestamp')['close'].pct_change() for t in tickers}).dropna()
     bh_portfolio_cum = (1 + bh_data.mean(axis=1)).cumprod()
     summary_bh = performance_summary(bh_portfolio_cum)
     summary_spy = performance_summary(spy_cum)
@@ -170,7 +179,6 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-01-01",
     print("\nSPY Buy-and-Hold Summary:\n", summary_spy)
 
     return portfolio_cum, summary, rolling_weights
-
 
 tickers = ["AAPL", "GOOG", "IBM", "MSFT", "AMZN"]
 portfolio_cum, summary, rolling_weights = multi_ticker_momentum_alpaca(tickers)
