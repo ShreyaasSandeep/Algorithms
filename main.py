@@ -47,6 +47,7 @@ def multi_ticker_momentum_alpaca(
     target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005,
     vol_lookback=20, plot=True,
     max_ticker_weight=0.25, max_sector_weight=0.40,
+    max_leverage=2.0, drawdown_limit=0.10,
     sector_map=sector_map
 ):
     all_data = fetch_alpaca_data_batch(tickers, start, end)
@@ -148,7 +149,17 @@ def multi_ticker_momentum_alpaca(
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
 
     portfolio_returns = (strategy_returns * rolling_weights.shift(1)).sum(axis=1)
-    portfolio_cum = (1 + portfolio_returns).cumprod()
+
+    portfolio_realized_vol = portfolio_returns.rolling(vol_lookback).std() * np.sqrt(252)
+    leverage_factor = (target_vol / portfolio_realized_vol).clip(0, max_leverage)
+    portfolio_returns_levered = portfolio_returns * leverage_factor.shift(1)
+
+    cum_portfolio = (1 + portfolio_returns_levered).cumprod()
+    cum_max = cum_portfolio.cummax()
+    drawdown = 1 - cum_portfolio / cum_max
+    drawdown_factor = np.where(drawdown < drawdown_limit, 1, 0)
+    portfolio_returns_final = portfolio_returns_levered * drawdown_factor
+    portfolio_cum_final = (1 + portfolio_returns_final).cumprod()
 
     spy_data = fetch_alpaca_data_batch(["SPY"], start, end)
     spy_data = spy_data[spy_data['symbol']=='SPY'][['timestamp','close']].copy()
@@ -173,7 +184,7 @@ def multi_ticker_momentum_alpaca(
             "Win Rate": win_rate
         })
 
-    summary = performance_summary(portfolio_cum)
+    summary = performance_summary(portfolio_cum_final)
     bh_data = pd.DataFrame({t: fetch_alpaca_data_batch([t], start, end).set_index('timestamp')['close'].pct_change() for t in tickers}).dropna()
     bh_portfolio_cum = (1+bh_data.mean(axis=1)).cumprod()
     summary_bh = performance_summary(bh_portfolio_cum)
@@ -181,22 +192,23 @@ def multi_ticker_momentum_alpaca(
 
     if plot:
         pd.DataFrame({
-            "Momentum Portfolio": portfolio_cum,
+            "Momentum Portfolio (Levered + DD Stop)": portfolio_cum_final,
             "Equal-Weight BH": bh_portfolio_cum,
             "SPY Buy-and-Hold": spy_cum
-        }).plot(figsize=(12,6), logy=True, title="Momentum Portfolio vs B&H vs SPY")
+        }).plot(figsize=(12,6), logy=True, title="Momentum Portfolio vs BH vs SPY")
         plt.show()
 
     print("Momentum Portfolio Summary:\n", summary)
     print("\nEqual-Weight Buy-and-Hold Summary:\n", summary_bh)
     print("\nSPY Buy-and-Hold Summary:\n", summary_spy)
 
-    return portfolio_cum, summary, rolling_weights
+    return portfolio_cum_final, summary, rolling_weights, leverage_factor
+
 
 portfolio_cum, summary, rolling_weights = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-10-11",
+    end="2025-10-16",
     max_ticker_weight=0.25,
     max_sector_weight=0.4,
     sector_map=sector_map,
