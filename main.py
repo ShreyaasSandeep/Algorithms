@@ -146,8 +146,15 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
     trades = all_data.groupby('symbol')['position_final'].diff().abs()
-    all_data['strategy'] = all_data['position_final'].shift(1) * all_data['returns']
-    all_data['strategy_net'] = all_data['strategy'] - trades * cost_rate - trades * slippage_rate
+    all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
+    all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
+
+    spread_factor = 0.0002
+    vol_factor = 0.5 * all_data['returns'].rolling(5, min_periods=1).std()
+    volume_penalty = np.random.normal(0, 0.0001, len(all_data))
+    all_data['dynamic_cost'] = cost_rate + slippage_rate + spread_factor + vol_factor + volume_penalty
+
+    all_data['strategy_net'] = all_data['strategy'] - trades * all_data['dynamic_cost'].clip(lower=0)
 
     return all_data
 
@@ -328,3 +335,4 @@ portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum
 )
 
 robustness_report(portfolio_cum, title="Momentum Portfolio")
+
