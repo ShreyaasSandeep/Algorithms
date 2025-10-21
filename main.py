@@ -61,7 +61,7 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8):
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     return df
 
-def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005):
+def compute_signals(all_data, target_vol=0.3, cost_rate=0.001, slippage_rate=0.0005):
     all_data = all_data.copy()
     all_data = all_data.sort_values(['symbol', 'timestamp'])
 
@@ -329,7 +329,7 @@ portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum
     start="2018-01-01",
     end="2025-10-19",
     max_ticker_weight=0.25,
-    max_sector_weight=0.4,
+    max_sector_weight=0.1,
     sector_map=sector_map,
     plot=True
 )
