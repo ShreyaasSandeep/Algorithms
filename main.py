@@ -171,12 +171,16 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
 
     return all_data
 
-def construct_portfolio(all_data, tickers, sector_map, target_vol=0.5, vol_lookback=20,
-                        max_ticker_weight=0.25, max_sector_weight=0.4, max_leverage=2.0, drawdown_limit=0.10):
+
+def construct_portfolio(all_data, tickers, sector_map,
+                                  target_vol=0.5, vol_lookback=20,
+                                  max_ticker_weight=0.25, max_sector_weight=0.4,
+                                  max_leverage=2.0):
     strategy_returns = all_data.pivot(index='timestamp', columns='symbol', values='strategy_net')
     strategy_returns = strategy_returns.fillna(0)
 
     rolling_vol = strategy_returns.rolling(vol_lookback, min_periods=1).std() * np.sqrt(252)
+
     rolling_weights = 1 / rolling_vol
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
     rolling_weights = rolling_weights.clip(upper=max_ticker_weight)
@@ -202,22 +206,21 @@ def construct_portfolio(all_data, tickers, sector_map, target_vol=0.5, vol_lookb
     leverage_factor = (target_vol / portfolio_realized_vol).clip(0, max_leverage)
     portfolio_returns_levered = portfolio_returns * leverage_factor.shift(1)
 
-    cum_portfolio = (1 + portfolio_returns_levered).cumprod()
-    cum_max = cum_portfolio.cummax()
-    drawdown = 1 - cum_portfolio / cum_max
-    drawdown_factor = np.clip(1 - drawdown / drawdown_limit, 0, 1)
-    portfolio_returns_final = portfolio_returns_levered * drawdown_factor
+    rolling_20d_ret = portfolio_returns.rolling(20).sum()
+    reactive_leverage = np.where(rolling_20d_ret < -0.05, 0.5, 1.0)
+    portfolio_returns_levered *= reactive_leverage
 
-    portfolio_cum_final = (1 + portfolio_returns_final).cumprod()
+    portfolio_cum_final = (1 + portfolio_returns_levered).cumprod()
 
     return portfolio_cum_final, rolling_weights, leverage_factor
+
 
 def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-11",
                                  sector_map=sector_map, plot=True,
                                  target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005,
                                  vol_lookback=20, max_ticker_weight=0.25,
                                  max_sector_weight=0.4, max_leverage=2.0,
-                                 drawdown_limit=0.1):
+                                 ):
     all_data = fetch_alpaca_data_batch(tickers, start, end)
 
     all_data = compute_signals(all_data, target_vol=target_vol,
@@ -226,7 +229,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-11",
     portfolio_cum, rolling_weights, leverage_factor = construct_portfolio(
         all_data, tickers, sector_map, target_vol=target_vol, vol_lookback=vol_lookback,
         max_ticker_weight=max_ticker_weight, max_sector_weight=max_sector_weight,
-        max_leverage=max_leverage, drawdown_limit=drawdown_limit
+        max_leverage=max_leverage
     )
 
     spy_data = fetch_alpaca_data_batch(["SPY"], start, end)
