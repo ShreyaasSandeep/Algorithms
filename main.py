@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os, pickle
+
 
 API_KEY = "PKOYSXCCALC4OTPQ146W"
 API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
@@ -38,21 +40,27 @@ def fetch_one(symbol, start, end, timeframe='1D'):
     return bars
 
 
-def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8):
+
+def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8, cache_dir="cache"):
+    os.makedirs(cache_dir, exist_ok=True)
     start = pd.to_datetime(start).strftime('%Y-%m-%d')
     end = pd.to_datetime(end).strftime('%Y-%m-%d')
 
     all_data = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_one, t, start, end, timeframe): t for t in tickers}
-        for future in as_completed(futures):
-            ticker = futures[future]
+    for t in tickers:
+        cache_file = f"{cache_dir}/{t}_{start}_{end}_{timeframe}.pkl"
+        if os.path.exists(cache_file):
+            bars = pickle.load(open(cache_file, "rb"))
+        else:
             try:
-                bars = future.result()
+                bars = fetch_one(t, start, end, timeframe)
                 if not bars.empty:
-                    all_data.append(bars)
+                    pickle.dump(bars, open(cache_file, "wb"))
             except Exception as e:
-                print(f"Error fetching {ticker}: {e}")
+                print(f"Error fetching {t}: {e}")
+                bars = pd.DataFrame()
+        if not bars.empty:
+            all_data.append(bars)
 
     if not all_data:
         raise ValueError("No data fetched from Alpaca.")
@@ -61,7 +69,8 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8):
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     return df
 
-def compute_signals(all_data, target_vol=0.3, cost_rate=0.001, slippage_rate=0.0005):
+
+def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005):
     all_data = all_data.copy()
     all_data = all_data.sort_values(['symbol', 'timestamp'])
 
@@ -98,16 +107,19 @@ def compute_signals(all_data, target_vol=0.3, cost_rate=0.001, slippage_rate=0.0
         lambda x: x.rolling(rolling_window, min_periods=1).mean() / x.rolling(rolling_window, min_periods=1).std()
     ).fillna(0)
 
-    total_sharpe = abs(sharpe_long) + abs(sharpe_short)
-    total_sharpe = total_sharpe.replace(0, np.nan)
+    eps = 1e-8
+    total_sharpe = (abs(sharpe_long) + abs(sharpe_short)).fillna(0)
+    total_sharpe = total_sharpe.where(total_sharpe > eps, eps)
     weight_long = sharpe_long / total_sharpe
     weight_short = sharpe_short / total_sharpe
+    weight_long = weight_long.replace([np.inf, -np.inf], 0).fillna(0)
+    weight_short = weight_short.replace([np.inf, -np.inf], 0).fillna(0)
 
     all_data['combined_signal'] = weight_long * all_data['signal_long'] + \
                                   weight_short * all_data['signal_short'] + \
                                   0.25 * all_data['RSI_signal']
 
-    def apply_hysteresis(signal, upper=-0.25, lower=-0.5):
+    def apply_hysteresis(signal, upper=-0.25, lower=-1):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
             if i == 0:
@@ -294,7 +306,7 @@ def robustness_report(portfolio_cum, title="Momentum Portfolio"):
     plt.grid(True)
     plt.show()
 
-    monthly_ret = portfolio_ret.resample('M').apply(lambda x: (1+x).prod()-1)
+    monthly_ret = portfolio_ret.resample('ME').apply(lambda x: (1+x).prod()-1)
     monthly_ret.plot(kind='bar', figsize=(14,4), color='skyblue')
     plt.title(f"{title} - Monthly Returns")
     plt.xlabel("Month")
@@ -327,7 +339,7 @@ def robustness_report(portfolio_cum, title="Momentum Portfolio"):
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-10-19",
+    end="2025-10-24",
     max_ticker_weight=0.25,
     max_sector_weight=0.1,
     sector_map=sector_map,
