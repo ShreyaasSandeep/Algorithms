@@ -205,8 +205,9 @@ def construct_portfolio(all_data, tickers, sector_map, target_vol=0.5, vol_lookb
     cum_portfolio = (1 + portfolio_returns_levered).cumprod()
     cum_max = cum_portfolio.cummax()
     drawdown = 1 - cum_portfolio / cum_max
-    drawdown_factor = np.where(drawdown < drawdown_limit, 1, 0)
+    drawdown_factor = np.clip(1 - drawdown / drawdown_limit, 0, 1)
     portfolio_returns_final = portfolio_returns_levered * drawdown_factor
+
     portfolio_cum_final = (1 + portfolio_returns_final).cumprod()
 
     return portfolio_cum_final, rolling_weights, leverage_factor
