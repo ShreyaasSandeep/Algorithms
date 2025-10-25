@@ -59,6 +59,7 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8, 
             except Exception as e:
                 print(f"Error fetching {t}: {e}")
                 bars = pd.DataFrame()
+
         if not bars.empty:
             all_data.append(bars)
 
@@ -112,8 +113,8 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     total_sharpe = total_sharpe.where(total_sharpe > eps, eps)
     weight_long = sharpe_long / total_sharpe
     weight_short = sharpe_short / total_sharpe
-    weight_long = weight_long.replace([np.inf, -np.inf], 0).fillna(0)
-    weight_short = weight_short.replace([np.inf, -np.inf], 0).fillna(0)
+    weight_long = weight_long.replace([np.inf, -np.inf], 0).fillna(1)
+    weight_short = weight_short.replace([np.inf, -np.inf], 0).fillna(1)
 
     all_data['combined_signal'] = weight_long * all_data['signal_long'] + \
                                   weight_short * all_data['signal_short'] + \
@@ -162,7 +163,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
 
     spread_factor = 0.0002
-    vol_factor = 0.5 * all_data['returns'].rolling(5, min_periods=1).std()
+    vol_factor = 0.1 * all_data['returns'].rolling(5, min_periods=1).std()
     volume_penalty = np.random.normal(0, 0.0001, len(all_data))
     all_data['dynamic_cost'] = cost_rate + slippage_rate + spread_factor + vol_factor + volume_penalty
 
