@@ -4,6 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, pickle
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import TimeSeriesSplit
+
 
 
 API_KEY = "PKOYSXCCALC4OTPQ146W"
@@ -70,7 +73,6 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8, 
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     return df
 
-
 def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005):
     all_data = all_data.copy()
     all_data = all_data.sort_values(['symbol', 'timestamp'])
@@ -80,45 +82,55 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['momentum_short'] = all_data.groupby('symbol')['close'].pct_change(5)
 
     all_data['signal_long'] = all_data.groupby('symbol')['momentum_long'].transform(
-        lambda x: (x - x.mean()) / x.std()
-    ).ewm(span=60).mean()
-
+        lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=60).mean()
+    )
     all_data['signal_short'] = all_data.groupby('symbol')['momentum_short'].transform(
-        lambda x: (x - x.mean()) / x.std()
-    ).ewm(span=20).mean()
-
-    z_clip = 3.0
-    all_data['signal_long'] = all_data['signal_long'].clip(-z_clip, z_clip)
-    all_data['signal_short'] = all_data['signal_short'].clip(-z_clip, z_clip)
+        lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=20).mean()
+    )
 
     delta = all_data.groupby('symbol')['close'].diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
     roll_up = up.ewm(span=14, adjust=False).mean()
     roll_down = down.ewm(span=14, adjust=False).mean()
-    RS = roll_up / roll_down
+    RS = roll_up / (roll_down + 1e-8)
     all_data['RSI_signal'] = (100 - (100 / (1 + RS)) - 50) / 50
 
-    rolling_window = 252
-    sharpe_long = all_data.groupby('symbol')['signal_long'].transform(
-        lambda x: x.rolling(rolling_window, min_periods=1).mean() / x.rolling(rolling_window, min_periods=1).std()
-    ).fillna(0)
+    all_data['SMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(200, min_periods=1).mean())
+    all_data['EMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.ewm(span=200, adjust=False).mean())
+    sma_signal = np.where(all_data['close'] > all_data['SMA_200'], 1, 0.5)
+    ema_signal = np.where(all_data['close'] > all_data['EMA_200'], 1, 0.5)
+    trend_strength = (all_data['signal_long'].abs() - all_data['signal_long'].abs().min()) / \
+                     (all_data['signal_long'].abs().max() - all_data['signal_long'].abs().min() + 1e-8)
+    all_data['weighted_filter'] = trend_strength * ema_signal + (1 - trend_strength) * sma_signal
 
-    sharpe_short = all_data.groupby('symbol')['signal_short'].transform(
-        lambda x: x.rolling(rolling_window, min_periods=1).mean() / x.rolling(rolling_window, min_periods=1).std()
-    ).fillna(0)
+    all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
+    all_data['next_open_return'] = all_data['next_open'] / all_data['close'] - 1
 
-    eps = 1e-8
-    total_sharpe = (abs(sharpe_long) + abs(sharpe_short)).fillna(0)
-    total_sharpe = total_sharpe.where(total_sharpe > eps, eps)
-    weight_long = sharpe_long / total_sharpe
-    weight_short = sharpe_short / total_sharpe
-    weight_long = weight_long.replace([np.inf, -np.inf], 0).fillna(1)
-    weight_short = weight_short.replace([np.inf, -np.inf], 0).fillna(1)
+    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter']
+    df_ml = all_data.dropna(subset=features + ['next_open_return']).copy()
 
-    all_data['combined_signal'] = weight_long * all_data['signal_long'] + \
-                                  weight_short * all_data['signal_short'] + \
-                                  0.25 * all_data['RSI_signal']
+    X = df_ml[features]
+    y = df_ml['next_open_return']
+
+    tscv = TimeSeriesSplit(n_splits=5)
+    coefs_list = []
+    for train_idx, test_idx in tscv.split(X):
+        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+        model = Ridge(alpha=0.01)
+        model.fit(X_train, y_train)
+        coefs_list.append(model.coef_)
+
+    avg_coefs = np.mean(coefs_list, axis=0)
+
+    all_data['combined_signal'] = (
+        avg_coefs[0]*all_data['signal_long'] +
+        avg_coefs[1]*all_data['signal_short'] +
+        avg_coefs[2]*all_data['RSI_signal'] +
+        avg_coefs[3]*all_data['weighted_filter']
+    )
+
+    all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
     def apply_hysteresis(signal, upper=-0.25, lower=-1):
         pos = np.zeros(len(signal))
@@ -134,47 +146,31 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                     pos[i] = pos[i - 1]
         return pos
 
-    all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal'].transform(
+    all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal_for_execution'].transform(
         lambda x: apply_hysteresis(x.values)
     )
 
-    all_data['SMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(200, min_periods=1).mean())
-    all_data['EMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.ewm(span=200, adjust=False).mean())
-
-    sma_signal = np.where(all_data['close'] > all_data['SMA_200'], 1, 0.5)
-    ema_signal = np.where(all_data['close'] > all_data['EMA_200'], 1, 0.5)
-
-    trend_strength = (all_data['combined_signal'].abs() - all_data['combined_signal'].abs().min()) / \
-                     (all_data['combined_signal'].abs().max() - all_data['combined_signal'].abs().min())
-
-    w_ema = trend_strength
-    w_sma = 1 - w_ema
-
-    all_data['weighted_filter'] = w_sma * sma_signal + w_ema * ema_signal
     all_data['position_filtered'] = all_data['position_hysteresis'] * all_data['weighted_filter']
 
-    realized_vol = all_data.groupby('symbol')['returns'].transform(
-        lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
+    realized_vol = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
     scaling = (target_vol / realized_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
-    trades = all_data.groupby('symbol')['position_final'].diff().abs()
-    all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
 
-    spread_factor = 0.0002
     vol_factor = 0.1 * all_data['returns'].rolling(5, min_periods=1).std()
-    volume_penalty = np.random.normal(0, 0.0001, len(all_data))
-    all_data['dynamic_cost'] = cost_rate + slippage_rate + spread_factor + vol_factor + volume_penalty
-
+    all_data['dynamic_cost'] = cost_rate + slippage_rate + 0.0002 + vol_factor
+    trades = all_data.groupby('symbol')['position_final'].diff().abs()
     all_data['strategy_net'] = all_data['strategy'] - trades * all_data['dynamic_cost'].clip(lower=0)
 
     return all_data
 
 
+
+
 def construct_portfolio(all_data, tickers, sector_map,
                                   target_vol=0.5, vol_lookback=20,
-                                  max_ticker_weight=0.25, max_sector_weight=0.4,
+                                  max_ticker_weight=0.25, max_sector_weight=0.1,
                                   max_leverage=2.0):
     strategy_returns = all_data.pivot(index='timestamp', columns='symbol', values='strategy_net')
     strategy_returns = strategy_returns.fillna(0)
@@ -219,7 +215,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-11",
                                  sector_map=sector_map, plot=True,
                                  target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005,
                                  vol_lookback=20, max_ticker_weight=0.25,
-                                 max_sector_weight=0.4, max_leverage=2.0,
+                                 max_sector_weight=0.1, max_leverage=2.0,
                                  ):
     all_data = fetch_alpaca_data_batch(tickers, start, end)
 
@@ -344,9 +340,9 @@ def robustness_report(portfolio_cum, title="Momentum Portfolio"):
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-10-24",
+    end="2025-10-25",
     max_ticker_weight=0.25,
-    max_sector_weight=0.1,
+    max_sector_weight=0.08,
     sector_map=sector_map,
     plot=True
 )
