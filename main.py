@@ -7,8 +7,6 @@ import os, pickle
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import TimeSeriesSplit
 
-
-
 API_KEY = "PKOYSXCCALC4OTPQ146W"
 API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
 BASE_URL = "https://paper-api.alpaca.markets/v2"
@@ -41,7 +39,6 @@ def fetch_one(symbol, start, end, timeframe='1D'):
     if not bars.empty:
         bars['symbol'] = symbol
     return bars
-
 
 
 def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8, cache_dir="cache"):
@@ -132,7 +129,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
 
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
-    def apply_hysteresis(signal, upper=-0.25, lower=-1):
+    def apply_hysteresis(signal, upper=0, lower=-1):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
             if i == 0:
@@ -141,7 +138,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                 if signal[i] > upper:
                     pos[i] = 1
                 elif signal[i] < lower:
-                    pos[i] = 0.5
+                    pos[i] = -1
                 else:
                     pos[i] = pos[i - 1]
         return pos
@@ -165,22 +162,21 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
 
     return all_data
 
-
-
-
 def construct_portfolio(all_data, tickers, sector_map,
-                                  target_vol=0.5, vol_lookback=20,
-                                  max_ticker_weight=0.25, max_sector_weight=0.1,
-                                  max_leverage=2.0):
-    strategy_returns = all_data.pivot(index='timestamp', columns='symbol', values='strategy_net')
-    strategy_returns = strategy_returns.fillna(0)
+                        target_vol=0.5, vol_lookback=20,
+                        max_ticker_weight=0.25, max_sector_weight=0.1,
+                        max_leverage=2.0,
+                        crisis_drawdown_threshold=-0.10,
+                        crisis_leverage_multiplier=0.2):
 
+    strategy_returns = all_data.pivot(index='timestamp', columns='symbol', values='strategy_net').fillna(0)
+
+    # compute rolling volatility and initial weights
     rolling_vol = strategy_returns.rolling(vol_lookback, min_periods=1).std() * np.sqrt(252)
-
     rolling_weights = 1 / rolling_vol
-    rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
-    rolling_weights = rolling_weights.clip(upper=max_ticker_weight)
+    rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0).clip(upper=max_ticker_weight)
 
+    # sector capping per day
     for date in rolling_weights.index:
         weights_day = rolling_weights.loc[date]
         sector_sums = {}
@@ -196,10 +192,22 @@ def construct_portfolio(all_data, tickers, sector_map,
 
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
 
-    portfolio_returns = (strategy_returns * rolling_weights.shift(1)).sum(axis=1)
+    # SPY drawdown-based crisis series
+    spy_data = fetch_alpaca_data_batch(["SPY"], all_data['timestamp'].min(), all_data['timestamp'].max())
+    spy_data = spy_data[spy_data['symbol']=='SPY'].set_index('timestamp')['close']
+    spy_cummax = spy_data.cummax()
+    crisis_series = (spy_data / spy_cummax - 1 < crisis_drawdown_threshold).astype(int).reindex(rolling_weights.index).fillna(0)
 
+    # apply crisis shrinkage
+    crisis_mask = crisis_series == 1
+    rolling_weights.loc[crisis_mask] *= crisis_leverage_multiplier
+    rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
+
+    portfolio_returns = (strategy_returns * rolling_weights.shift(1)).sum(axis=1)
     portfolio_realized_vol = portfolio_returns.rolling(vol_lookback, min_periods=1).std() * np.sqrt(252)
     leverage_factor = (target_vol / portfolio_realized_vol).clip(0, max_leverage)
+    leverage_factor *= np.where(crisis_series==1, crisis_leverage_multiplier, 1.0)
+
     portfolio_returns_levered = portfolio_returns * leverage_factor.shift(1)
 
     rolling_20d_ret = portfolio_returns.rolling(20).sum()
@@ -210,22 +218,22 @@ def construct_portfolio(all_data, tickers, sector_map,
 
     return portfolio_cum_final, rolling_weights, leverage_factor
 
-
 def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-11",
                                  sector_map=sector_map, plot=True,
                                  target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005,
                                  vol_lookback=20, max_ticker_weight=0.25,
                                  max_sector_weight=0.1, max_leverage=2.0,
-                                 ):
-    all_data = fetch_alpaca_data_batch(tickers, start, end)
+                                 crisis_drawdown_threshold=-0.10,
+                                 crisis_leverage_multiplier=0.2):
 
-    all_data = compute_signals(all_data, target_vol=target_vol,
-                               cost_rate=cost_rate, slippage_rate=slippage_rate)
+    all_data = fetch_alpaca_data_batch(tickers, start, end)
+    all_data = compute_signals(all_data, target_vol=target_vol, cost_rate=cost_rate, slippage_rate=slippage_rate)
 
     portfolio_cum, rolling_weights, leverage_factor = construct_portfolio(
         all_data, tickers, sector_map, target_vol=target_vol, vol_lookback=vol_lookback,
         max_ticker_weight=max_ticker_weight, max_sector_weight=max_sector_weight,
-        max_leverage=max_leverage
+        max_leverage=max_leverage, crisis_drawdown_threshold=crisis_drawdown_threshold,
+        crisis_leverage_multiplier=crisis_leverage_multiplier
     )
 
     spy_data = fetch_alpaca_data_batch(["SPY"], start, end)
@@ -281,18 +289,20 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-10-11",
     summary_spy = performance_summary(spy_cum)
 
     if plot:
-        pd.DataFrame({
+        df_plot = pd.DataFrame({
             "Momentum Portfolio": portfolio_cum,
             "Equal-Weight BH": bh_portfolio_cum,
             "SPY Buy-and-Hold": spy_cum
-        }).plot(figsize=(12, 6), logy=True, title="Momentum Portfolio vs BH vs SPY")
+        })
+        ax = df_plot.plot(figsize=(12, 6), logy=True, title="Momentum Portfolio vs BH vs SPY")
+
         plt.show()
 
     print("Momentum Portfolio Summary:\n", summary)
     print("\nEqual-Weight Buy-and-Hold Summary:\n", summary_bh)
     print("\nSPY Buy-and-Hold Summary:\n", summary_spy)
 
-    return portfolio_cum, summary, rolling_weights, leverage_factor
+    return portfolio_cum, summary, rolling_weights, leverage_factor, spy_data
 
 def robustness_report(portfolio_cum, title="Momentum Portfolio"):
     portfolio_ret = portfolio_cum.pct_change().dropna()
@@ -303,39 +313,8 @@ def robustness_report(portfolio_cum, title="Momentum Portfolio"):
     rolling_sharpe.plot(color='blue')
     plt.title(f"{title} - Rolling 6-Month Sharpe")
     plt.xlabel("Date")
-    plt.ylabel("Sharpe")
-    plt.grid(True)
-    plt.show()
+    plt
 
-    monthly_ret = portfolio_ret.resample('ME').apply(lambda x: (1+x).prod()-1)
-    monthly_ret.plot(kind='bar', figsize=(14,4), color='skyblue')
-    plt.title(f"{title} - Monthly Returns")
-    plt.xlabel("Month")
-    plt.ylabel("Return")
-    plt.show()
-
-    cum_max = portfolio_cum.cummax()
-    drawdown = 1 - portfolio_cum / cum_max
-    plt.figure(figsize=(12,4))
-    drawdown.plot(color='red')
-    plt.title(f"{title} - Drawdowns")
-    plt.xlabel("Date")
-    plt.ylabel("Drawdown")
-    plt.grid(True)
-    plt.show()
-    print(f"Max Drawdown: {drawdown.max():.2%}")
-
-    VaR_5 = np.percentile(portfolio_ret, 5)
-    VaR_1 = np.percentile(portfolio_ret, 1)
-    CVaR_5 = portfolio_ret[portfolio_ret <= VaR_5].mean()
-    CVaR_1 = portfolio_ret[portfolio_ret <= VaR_1].mean()
-    print(f"5% VaR: {VaR_5:.2%}, 5% CVaR: {CVaR_5:.2%}")
-    print(f"1% VaR: {VaR_1:.2%}, 1% CVaR: {CVaR_1:.2%}")
-
-    wins = portfolio_ret[portfolio_ret > 0]
-    losses = portfolio_ret[portfolio_ret < 0]
-    print(f"Win rate: {len(wins)/len(portfolio_ret):.2%}")
-    print(f"Average win: {wins.mean():.2%}, Average loss: {losses.mean():.2%}")
 
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
