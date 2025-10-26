@@ -101,12 +101,19 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                      (all_data['signal_long'].abs().max() - all_data['signal_long'].abs().min() + 1e-8)
     all_data['weighted_filter'] = trend_strength * ema_signal + (1 - trend_strength) * sma_signal
 
+    bb_lookback = 20
+    bb_k = 2
+    all_data['SMA_BB'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(bb_lookback).mean())
+    all_data['STD_BB'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(bb_lookback).std())
+    all_data['BB_upper'] = all_data['SMA_BB'] + bb_k * all_data['STD_BB']
+    all_data['BB_lower'] = all_data['SMA_BB'] - bb_k * all_data['STD_BB']
+    all_data['BB_zscore'] = (all_data['close'] - all_data['SMA_BB']) / (all_data['BB_upper'] - all_data['BB_lower'] + 1e-8)
+
     all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
     all_data['next_open_return'] = all_data['next_open'] / all_data['close'] - 1
 
-    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter']
+    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore']
     df_ml = all_data.dropna(subset=features + ['next_open_return']).copy()
-
     X = df_ml[features]
     y = df_ml['next_open_return']
 
@@ -117,16 +124,15 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
         model = Ridge(alpha=0.01)
         model.fit(X_train, y_train)
         coefs_list.append(model.coef_)
-
     avg_coefs = np.mean(coefs_list, axis=0)
 
     all_data['combined_signal'] = (
         avg_coefs[0]*all_data['signal_long'] +
         avg_coefs[1]*all_data['signal_short'] +
         avg_coefs[2]*all_data['RSI_signal'] +
-        avg_coefs[3]*all_data['weighted_filter']
+        avg_coefs[3]*all_data['weighted_filter'] +
+        avg_coefs[4]*all_data['BB_zscore']
     )
-
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
     def apply_hysteresis(signal, upper=0, lower=-1):
@@ -146,13 +152,11 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal_for_execution'].transform(
         lambda x: apply_hysteresis(x.values)
     )
-
     all_data['position_filtered'] = all_data['position_hysteresis'] * all_data['weighted_filter']
 
     realized_vol = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
     scaling = (target_vol / realized_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
-
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
 
     vol_factor = 0.1 * all_data['returns'].rolling(5, min_periods=1).std()
@@ -161,6 +165,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['strategy_net'] = all_data['strategy'] - trades * all_data['dynamic_cost'].clip(lower=0)
 
     return all_data
+
 
 def construct_portfolio(all_data, tickers, sector_map,
                         target_vol=0.5, vol_lookback=20,
@@ -171,12 +176,10 @@ def construct_portfolio(all_data, tickers, sector_map,
 
     strategy_returns = all_data.pivot(index='timestamp', columns='symbol', values='strategy_net').fillna(0)
 
-    # compute rolling volatility and initial weights
     rolling_vol = strategy_returns.rolling(vol_lookback, min_periods=1).std() * np.sqrt(252)
     rolling_weights = 1 / rolling_vol
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0).clip(upper=max_ticker_weight)
 
-    # sector capping per day
     for date in rolling_weights.index:
         weights_day = rolling_weights.loc[date]
         sector_sums = {}
@@ -192,13 +195,11 @@ def construct_portfolio(all_data, tickers, sector_map,
 
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
 
-    # SPY drawdown-based crisis series
     spy_data = fetch_alpaca_data_batch(["SPY"], all_data['timestamp'].min(), all_data['timestamp'].max())
     spy_data = spy_data[spy_data['symbol']=='SPY'].set_index('timestamp')['close']
     spy_cummax = spy_data.cummax()
     crisis_series = (spy_data / spy_cummax - 1 < crisis_drawdown_threshold).astype(int).reindex(rolling_weights.index).fillna(0)
 
-    # apply crisis shrinkage
     crisis_mask = crisis_series == 1
     rolling_weights.loc[crisis_mask] *= crisis_leverage_multiplier
     rolling_weights = rolling_weights.div(rolling_weights.sum(axis=1), axis=0)
