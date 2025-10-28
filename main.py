@@ -107,35 +107,40 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['STD_BB'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(bb_lookback).std())
     all_data['BB_upper'] = all_data['SMA_BB'] + bb_k * all_data['STD_BB']
     all_data['BB_lower'] = all_data['SMA_BB'] - bb_k * all_data['STD_BB']
-    all_data['BB_zscore'] = (all_data['close'] - all_data['SMA_BB']) / (all_data['BB_upper'] - all_data['BB_lower'] + 1e-8)
+    all_data['BB_zscore'] = (all_data['close'] - all_data['SMA_BB']) / (all_data['STD_BB'] + 1e-8)
 
     all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
     all_data['next_open_return'] = all_data['next_open'] / all_data['close'] - 1
 
     features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore']
-    df_ml = all_data.dropna(subset=features + ['next_open_return']).copy()
-    X = df_ml[features]
-    y = df_ml['next_open_return']
+    all_data = all_data.dropna(subset=features + ['next_open_return']).copy()
 
-    tscv = TimeSeriesSplit(n_splits=5)
-    coefs_list = []
-    for train_idx, test_idx in tscv.split(X):
-        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
-        model = Ridge(alpha=0.01)
-        model.fit(X_train, y_train)
-        coefs_list.append(model.coef_)
-    avg_coefs = np.mean(coefs_list, axis=0)
+    def rolling_ridge_predictions(df, features, target='next_open_return', window=252, alpha=0.01):
+        df = df.copy()
+        df['combined_signal'] = np.nan
+        model = Ridge(alpha=alpha)
 
-    all_data['combined_signal'] = (
-        avg_coefs[0]*all_data['signal_long'] +
-        avg_coefs[1]*all_data['signal_short'] +
-        avg_coefs[2]*all_data['RSI_signal'] +
-        avg_coefs[3]*all_data['weighted_filter'] +
-        avg_coefs[4]*all_data['BB_zscore']
-    )
+        for sym in df['symbol'].unique():
+            sym_df = df[df['symbol'] == sym]
+            X = sym_df[features]
+            y = sym_df[target]
+            preds = []
+
+            for i in range(window, len(sym_df)):
+                X_train = X.iloc[i-window:i]
+                y_train = y.iloc[i-window:i]
+                model.fit(X_train, y_train)
+                preds.append(model.predict(X.iloc[[i]])[0])
+
+            df.loc[sym_df.index[window:], 'combined_signal'] = preds
+
+        return df
+
+    all_data = rolling_ridge_predictions(all_data, features)
+
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
-    def apply_hysteresis(signal, upper=0, lower=-1):
+    def apply_hysteresis(signal, upper=-0.25, lower=-1):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
             if i == 0:
@@ -144,19 +149,19 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                 if signal[i] > upper:
                     pos[i] = 1
                 elif signal[i] < lower:
-                    pos[i] = -1
+                    pos[i] = 0.5
                 else:
                     pos[i] = pos[i - 1]
         return pos
 
-    all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal_for_execution'].transform(
-        lambda x: apply_hysteresis(x.values)
-    )
+    all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal_for_execution'] \
+        .transform(lambda x: apply_hysteresis(x.values))
     all_data['position_filtered'] = all_data['position_hysteresis'] * all_data['weighted_filter']
 
     realized_vol = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
     scaling = (target_vol / realized_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
+
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
 
     vol_factor = 0.1 * all_data['returns'].rolling(5, min_periods=1).std()
@@ -165,6 +170,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['strategy_net'] = all_data['strategy'] - trades * all_data['dynamic_cost'].clip(lower=0)
 
     return all_data
+
 
 
 def construct_portfolio(all_data, tickers, sector_map,
@@ -320,9 +326,9 @@ def robustness_report(portfolio_cum, title="Momentum Portfolio"):
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-10-25",
+    end="2025-10-27",
     max_ticker_weight=0.25,
-    max_sector_weight=0.08,
+    max_sector_weight=0.05,
     sector_map=sector_map,
     plot=True
 )
