@@ -8,6 +8,8 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import TimeSeriesSplit
 import time
 import threading
+from sklearn.linear_model import SGDRegressor
+
 
 
 API_KEY = "PKOYSXCCALC4OTPQ146W"
@@ -167,30 +169,42 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data = all_data.dropna(subset=features + ['next_open_return']).copy()
 
     #Created a walk-forward linear model using machine learning
-    def rolling_ridge_predictions(df, features, target='next_open_return', window=252, alpha=0.01):
+    def rolling_sgd_predictions(df, features, target='next_open_return',
+                                window=252, alpha=0.01, retrain_interval=5):
+
         df = df.copy()
         df['combined_signal'] = np.nan
-        model = Ridge(alpha=alpha)
 
         for sym in df['symbol'].unique():
-            sym_df = df[df['symbol'] == sym]
-            X = sym_df[features]
-            y = sym_df[target]
+            sym_df = df[df['symbol'] == sym].copy()
+            X = sym_df[features].values
+            y = sym_df[target].values
             preds = []
 
-            retrain_interval = 20
+            # Initialize incremental model (Ridge-like with SGD)
+            model = SGDRegressor(
+                alpha=alpha,
+                penalty='l2',
+                max_iter=1,
+                tol=None,
+                warm_start=True,
+                learning_rate='constant',
+                eta0=0.01,
+                random_state=42
+            )
+
             for i in range(window, len(sym_df)):
                 if (i - window) % retrain_interval == 0:
-                    X_train = X.iloc[i - window:i]
-                    y_train = y.iloc[i - window:i]
-                    model.fit(X_train, y_train)
-                preds.append(model.predict(X.iloc[[i]])[0])
+                    X_train = X[i - window:i]
+                    y_train = y[i - window:i]
+                    model.partial_fit(X_train, y_train)  # incremental update
+                preds.append(model.predict(X[[i]])[0])
 
             df.loc[sym_df.index[window:], 'combined_signal'] = preds
 
         return df
 
-    all_data = rolling_ridge_predictions(all_data, features)
+    all_data = rolling_sgd_predictions(all_data, features)
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
     #Logic regarding position changes based on signal
