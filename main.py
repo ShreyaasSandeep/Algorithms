@@ -119,12 +119,18 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data = all_data.copy()
     all_data = all_data.sort_values(['symbol', 'timestamp'])
 
-    #Finds returns for each ticker daily, from the past 20 days and from the past 5 days.
+    # Returns and momentum
     all_data['returns'] = all_data.groupby('symbol')['close'].pct_change()
     all_data['momentum_long'] = all_data.groupby('symbol')['close'].pct_change(20)
     all_data['momentum_short'] = all_data.groupby('symbol')['close'].pct_change(5)
 
-    #Normalises and smooths with EWM
+    # Volatility ratio
+    vol_short = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(5, min_periods=1).std())
+    vol_long = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std())
+    all_data['volatility_ratio'] = (vol_short / (vol_long + 1e-8)).fillna(1) 
+
+
+    # Existing normalized signals
     all_data['signal_long'] = all_data.groupby('symbol')['momentum_long'].transform(
         lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=60).mean()
     )
@@ -132,7 +138,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
         lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=20).mean()
     )
 
-    #Computes a normalised RSI value for each equity
+    # RSI calculation
     delta = all_data.groupby('symbol')['close'].diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
@@ -141,11 +147,10 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     RS = roll_up / (roll_down + 1e-8)
     all_data['RSI_signal'] = (100 - (100 / (1 + RS)) - 50) / 50
 
-    #Calculation of two 200-day averages
+    # SMA and EMA
     all_data['SMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(200, min_periods=1).mean())
     all_data['EMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.ewm(span=200, adjust=False).mean())
 
-    #Trend-based signal based on position of close data relative to averages
     sma_signal = np.where(all_data['close'] > all_data['SMA_200'], 1, 0.5)
     ema_signal = np.where(all_data['close'] > all_data['EMA_200'], 1, 0.5)
 
@@ -153,7 +158,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                      (all_data['signal_long'].abs().max() - all_data['signal_long'].abs().min() + 1e-8)
     all_data['weighted_filter'] = trend_strength * ema_signal + (1 - trend_strength) * sma_signal
 
-    #Normalised Bollinger bands
+    # Bollinger bands
     bb_lookback = 20
     bb_k = 2
     all_data['SMA_BB'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(bb_lookback).mean())
@@ -165,10 +170,10 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
     all_data['next_open_return'] = all_data['next_open'] / all_data['close'] - 1
 
-    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore']
+    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore', 'volatility_ratio']
     all_data = all_data.dropna(subset=features + ['next_open_return']).copy()
 
-    #Created a walk-forward linear model using machine learning
+    # Rolling SGD model training
     def rolling_sgd_predictions(df, features, target='next_open_return',
                                 window=252, alpha=0.01, retrain_interval=5):
 
@@ -181,7 +186,6 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
             y = sym_df[target].values
             preds = []
 
-            # Initialize incremental model (Ridge-like with SGD)
             model = SGDRegressor(
                 alpha=alpha,
                 penalty='l2',
@@ -197,7 +201,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                 if (i - window) % retrain_interval == 0:
                     X_train = X[i - window:i]
                     y_train = y[i - window:i]
-                    model.partial_fit(X_train, y_train)  # incremental update
+                    model.partial_fit(X_train, y_train)
                 preds.append(model.predict(X[[i]])[0])
 
             df.loc[sym_df.index[window:], 'combined_signal'] = preds
@@ -207,7 +211,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data = rolling_sgd_predictions(all_data, features)
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
-    #Logic regarding position changes based on signal
+    # Position hysteresis and filtering
     def apply_hysteresis(signal, upper=-0.25, lower=-1):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
@@ -222,25 +226,23 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                     pos[i] = pos[i - 1]
         return pos
 
-    #Smooths all position changes
     all_data['position_hysteresis'] = all_data.groupby('symbol')['combined_signal_for_execution'] \
         .transform(lambda x: apply_hysteresis(x.values))
     all_data['position_filtered'] = all_data['position_hysteresis'] * all_data['weighted_filter']
 
-    #Computes realised volatility for each ticker and scales so that each ticker position has roughly equal risk
+    # Risk scaling and final position
     realised_vol = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
     scaling = (target_vol / realised_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
-    #Implements strategy
+    # Strategy returns and cost simulation
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
-
-    #Calculates daily position change and uses this to simulate how costs affect returns
     all_data['position_change'] = all_data.groupby('symbol')['position_final'].diff().abs()
     all_data['dynamic_cost'] = cost_rate + slippage_rate
     all_data['strategy_net'] = all_data['strategy'] - all_data['position_change'] * all_data['dynamic_cost']
 
     return all_data
+
 
 
 
