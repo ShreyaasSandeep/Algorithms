@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, pickle
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import TimeSeriesSplit
+import time
+import threading
+
 
 API_KEY = "PKOYSXCCALC4OTPQ146W"
 API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
@@ -13,7 +16,7 @@ BASE_URL = "https://paper-api.alpaca.markets/v2"
 
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
-#List of equities that portfolio consists of
+#List of equities that the portfolio consists of
 tickers = [
     "AAPL", "MSFT", "GOOG", "AMZN", "JPM", "JNJ", "XOM", "UNH",
     "PG", "NVDA", "HD", "V", "MA", "PFE", "BA", "KO", "PEP", "CAT", "T", "CVX"
@@ -45,33 +48,69 @@ def fetch_one(symbol, start, end, timeframe='1D'):
 
 #Collects all data for all tickers and caches it
 def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D', max_workers=8, cache_dir="cache"):
+    #Ensures cache directory is created
     os.makedirs(cache_dir, exist_ok=True)
-    start = pd.to_datetime(start).strftime('%Y-%m-%d')
-    end = pd.to_datetime(end).strftime('%Y-%m-%d')
+    start_str = pd.to_datetime(start).strftime('%Y-%m-%d')
+    end_str = pd.to_datetime(end).strftime('%Y-%m-%d')
+
+    # Prevents simultaneous writes to the same cache
+    cache_lock = threading.Lock()
+
+    def task(ticker):
+        #Creates unique cache file for each ticker
+        cache_file = f"{cache_dir}/{ticker}_{start_str}_{end_str}_{timeframe}.pkl"
+        #Path if cache file exists already for ticker
+        if os.path.exists(cache_file):
+            try:
+                obj = pickle.load(open(cache_file, "rb"))
+                if not obj.empty:
+                    return obj
+            except Exception as e:
+                print(f"[{ticker}] failed to read cache, will refetch: {e}")
+
+        # Path if cache file doesn't exist or there is an error
+        bars = fetch_one(ticker, start_str, end_str, timeframe=timeframe)
+        if bars is None or bars.empty:
+            return pd.DataFrame()
+
+        # Ensures symbol column in present in dataframe
+        bars = bars.copy()
+        if 'symbol' not in bars.columns:
+            bars['symbol'] = ticker
+
+        try:
+            with cache_lock:
+                if not os.path.exists(cache_file):
+                    pickle.dump(bars, open(cache_file, "wb"))
+        except Exception as e:
+            print(f"[{ticker}] error writing cache: {e}")
+
+        return bars
 
     all_data = []
-    for t in tickers:
-        cache_file = f"{cache_dir}/{t}_{start}_{end}_{timeframe}.pkl"
-        if os.path.exists(cache_file):
-            bars = pickle.load(open(cache_file, "rb"))
-        else:
-            try:
-                bars = fetch_one(t, start, end, timeframe)
-                if not bars.empty:
-                    pickle.dump(bars, open(cache_file, "wb"))
-            except Exception as e:
-                print(f"Error fetching {t}: {e}")
-                bars = pd.DataFrame()
+    errors = {}
 
-        if not bars.empty:
-            all_data.append(bars)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_ticker = {executor.submit(task, t): t for t in tickers}
+        for fut in as_completed(future_to_ticker):
+            t = future_to_ticker[fut]
+            try:
+                res = fut.result()
+                if isinstance(res, pd.DataFrame) and not res.empty:
+                    all_data.append(res)
+                else:
+                    print(f"[{t}] no data returned (empty DataFrame).")
+            except Exception as e:
+                print(f"[{t}] failed after retries: {e}")
+                errors[t] = str(e)
 
     if not all_data:
-        raise ValueError("No data fetched from Alpaca.")
+        raise ValueError(f"No data fetched from Alpaca. Errors: {errors}")
 
     df = pd.concat(all_data).reset_index()
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     return df
+
 
 #Uses signals to direct trades
 def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0005):
@@ -139,10 +178,12 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
             y = sym_df[target]
             preds = []
 
+            retrain_interval = 20
             for i in range(window, len(sym_df)):
-                X_train = X.iloc[i-window:i]
-                y_train = y.iloc[i-window:i]
-                model.fit(X_train, y_train)
+                if (i - window) % retrain_interval == 0:
+                    X_train = X.iloc[i - window:i]
+                    y_train = y.iloc[i - window:i]
+                    model.fit(X_train, y_train)
                 preds.append(model.predict(X.iloc[[i]])[0])
 
             df.loc[sym_df.index[window:], 'combined_signal'] = preds
@@ -344,7 +385,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-11-01",
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-11-01",
+    end="2025-11-02",
     max_ticker_weight=0.25,
     max_sector_weight=0.1,
     sector_map=sector_map,
