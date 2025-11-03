@@ -178,10 +178,12 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
             y = sym_df[target]
             preds = []
 
+            retrain_interval = 20
             for i in range(window, len(sym_df)):
-                X_train = X.iloc[i-window:i]
-                y_train = y.iloc[i-window:i]
-                model.fit(X_train, y_train)
+                if (i - window) % retrain_interval == 0:
+                    X_train = X.iloc[i - window:i]
+                    y_train = y.iloc[i - window:i]
+                    model.fit(X_train, y_train)
                 preds.append(model.predict(X.iloc[[i]])[0])
 
             df.loc[sym_df.index[window:], 'combined_signal'] = preds
@@ -383,7 +385,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-11-01",
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-11-01",
+    end="2025-11-02",
     max_ticker_weight=0.25,
     max_sector_weight=0.1,
     sector_map=sector_map,
