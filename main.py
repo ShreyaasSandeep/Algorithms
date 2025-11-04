@@ -127,10 +127,9 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     # Volatility ratio
     vol_short = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(5, min_periods=1).std())
     vol_long = all_data.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std())
-    all_data['volatility_ratio'] = (vol_short / (vol_long + 1e-8)).fillna(1) 
+    all_data['volatility_ratio'] = (vol_short / (vol_long + 1e-8)).fillna(1)
 
-
-    # Existing normalized signals
+    # Normalized momentum signals
     all_data['signal_long'] = all_data.groupby('symbol')['momentum_long'].transform(
         lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=60).mean()
     )
@@ -158,7 +157,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
                      (all_data['signal_long'].abs().max() - all_data['signal_long'].abs().min() + 1e-8)
     all_data['weighted_filter'] = trend_strength * ema_signal + (1 - trend_strength) * sma_signal
 
-    # Bollinger bands
+    # Bollinger Bands
     bb_lookback = 20
     bb_k = 2
     all_data['SMA_BB'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(bb_lookback).mean())
@@ -167,16 +166,44 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['BB_lower'] = all_data['SMA_BB'] - bb_k * all_data['STD_BB']
     all_data['BB_zscore'] = (all_data['close'] - all_data['SMA_BB']) / (all_data['STD_BB'] + 1e-8)
 
+    #Volume spike features
+    eps = 1e-8
+    vol_lookback_mean = 20
+    vol_lookback_std = 20
+
+    all_data['vol_mean'] = all_data.groupby('symbol')['volume'].transform(
+        lambda x: x.rolling(vol_lookback_mean, min_periods=1).mean()
+    )
+    all_data['vol_std'] = all_data.groupby('symbol')['volume'].transform(
+        lambda x: x.rolling(vol_lookback_std, min_periods=1).std().fillna(0)
+    )
+    all_data['volume_spike_ratio_raw'] = all_data['volume'] / (all_data['vol_mean'] + eps)
+    all_data['volume_spike_log'] = np.log1p(all_data['volume_spike_ratio_raw'])
+    all_data['volume_zscore'] = (all_data['volume'] - all_data['vol_mean']) / (all_data['vol_std'] + eps)
+
+    clip_upper, clip_lower = 5.0, -5.0
+    all_data['volume_spike_log'] = all_data['volume_spike_log'].clip(lower=0.0, upper=clip_upper)
+    all_data['volume_zscore'] = all_data['volume_zscore'].clip(lower=clip_lower, upper=clip_upper)
+
+    all_data['volume_spike_combined'] = 0.6 * (all_data['volume_spike_log'] / (all_data['volume_spike_log'].std() + eps)) + \
+                                       0.4 * (all_data['volume_zscore'] / (all_data['volume_zscore'].std() + eps))
+    all_data['volume_spike_rank'] = all_data.groupby('timestamp')['volume_spike_combined'].transform(
+        lambda x: x.rank(pct=True)
+    )
+
     all_data['next_open'] = all_data.groupby('symbol')['open'].shift(-1)
     all_data['next_open_return'] = all_data['next_open'] / all_data['close'] - 1
 
-    features = ['signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore', 'volatility_ratio']
+    features = [
+        'signal_long', 'signal_short', 'RSI_signal',
+        'weighted_filter', 'BB_zscore', 'volatility_ratio',
+        'volume_spike_rank'
+    ]
     all_data = all_data.dropna(subset=features + ['next_open_return']).copy()
 
-    # Rolling SGD model training
+    # Rolling SGD model
     def rolling_sgd_predictions(df, features, target='next_open_return',
                                 window=252, alpha=0.01, retrain_interval=5):
-
         df = df.copy()
         df['combined_signal'] = np.nan
 
@@ -211,7 +238,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data = rolling_sgd_predictions(all_data, features)
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
-    # Position hysteresis and filtering
+    # Position hysteresis
     def apply_hysteresis(signal, upper=-0.25, lower=-1):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
@@ -235,13 +262,14 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     scaling = (target_vol / realised_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
-    # Strategy returns and cost simulation
+    # Strategy returns and costs
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
     all_data['position_change'] = all_data.groupby('symbol')['position_final'].diff().abs()
     all_data['dynamic_cost'] = cost_rate + slippage_rate
     all_data['strategy_net'] = all_data['strategy'] - all_data['position_change'] * all_data['dynamic_cost']
 
     return all_data
+
 
 
 
