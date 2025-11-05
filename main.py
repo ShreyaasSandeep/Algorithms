@@ -137,6 +137,14 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
         lambda x: ((x - x.mean()) / (x.std() + 1e-8)).ewm(span=20).mean()
     )
 
+    # Ranked each stock’s long-term momentum relative to others on that day
+    all_data['rank_momentum'] = all_data.groupby('timestamp')['momentum_long'].rank(pct=True)
+
+    # Sector-neutral ranking
+    all_data['sector_rank_momentum'] = all_data.groupby(
+        ['timestamp', all_data['symbol'].map(sector_map)]
+    )['momentum_long'].rank(pct=True)
+
     # RSI calculation
     delta = all_data.groupby('symbol')['close'].diff()
     up = delta.clip(lower=0)
@@ -197,7 +205,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     features = [
         'signal_long', 'signal_short', 'RSI_signal',
         'weighted_filter', 'BB_zscore', 'volatility_ratio',
-        'volume_spike_rank'
+        'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum'
     ]
     all_data = all_data.dropna(subset=features + ['next_open_return']).copy()
 
@@ -429,7 +437,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-11-01",
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-11-02",
+    end="2025-11-03",
     max_ticker_weight=0.25,
     max_sector_weight=0.1,
     sector_map=sector_map,
