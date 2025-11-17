@@ -249,7 +249,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
     # Position hysteresis
-    def apply_hysteresis(signal, upper=0, lower=-0.03):
+    def apply_hysteresis(signal, upper=-0, lower=-0.04):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
             if i == 0:
@@ -272,8 +272,24 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     scaling = (target_vol / realised_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
+    #Prevents overtrading by forcing positions to be held for at least 5 days
+    def enforce_min_holding(positions, min_hold=5):
+        final_pos = positions.copy()
+        last_change = 0
+        for i in range(1, len(positions)):
+            if final_pos.iloc[i] != final_pos.iloc[i - 1]:
+                if i - last_change < min_hold:
+                    final_pos.iloc[i] = final_pos.iloc[i - 1]  # block the change
+                else:
+                    last_change = i
+        return final_pos
+
+    all_data["position_final"] = all_data.groupby("symbol")["position_final"].transform(
+        lambda x: enforce_min_holding(x, min_hold=5)
+    )
+
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
-    
+
     # Estimate bid-ask spread using short-term volatility
     estimated_spread = (
             all_data.groupby("symbol")["returns"]
