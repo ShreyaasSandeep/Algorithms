@@ -158,6 +158,8 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['SMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.rolling(200, min_periods=1).mean())
     all_data['EMA_200'] = all_data.groupby('symbol')['close'].transform(lambda x: x.ewm(span=200, adjust=False).mean())
 
+
+
     sma_signal = np.where(all_data['close'] > all_data['SMA_200'], 1, 0.5)
     ema_signal = np.where(all_data['close'] > all_data['EMA_200'], 1, 0.5)
 
@@ -247,7 +249,7 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     all_data['combined_signal_for_execution'] = all_data.groupby('symbol')['combined_signal'].shift(1)
 
     # Position hysteresis
-    def apply_hysteresis(signal, upper=-0.25, lower=-1):
+    def apply_hysteresis(signal, upper=0, lower=-0.03):
         pos = np.zeros(len(signal))
         for i in range(len(signal)):
             if i == 0:
@@ -270,11 +272,24 @@ def compute_signals(all_data, target_vol=0.5, cost_rate=0.001, slippage_rate=0.0
     scaling = (target_vol / realised_vol).clip(0, 3)
     all_data['position_final'] = all_data['position_filtered'] * scaling
 
-    # Strategy returns and costs
     all_data['strategy'] = all_data['position_final'].shift(1) * (all_data['next_open'] / all_data['close'] - 1)
-    all_data['position_change'] = all_data.groupby('symbol')['position_final'].diff().abs()
-    all_data['dynamic_cost'] = cost_rate + slippage_rate
-    all_data['strategy_net'] = all_data['strategy'] - all_data['position_change'] * all_data['dynamic_cost']
+    
+    # Estimate bid-ask spread using short-term volatility
+    estimated_spread = (
+            all_data.groupby("symbol")["returns"]
+            .transform(lambda x: x.rolling(5, min_periods=1).std())
+            * 0.5
+    ).clip(lower=0.0001)
+
+    # Calculate transaction costs
+    total_cost_rate = cost_rate + slippage_rate + estimated_spread
+
+    position_change_local = (
+        all_data.groupby("symbol")["position_final"].diff().abs()
+    )
+    all_data["strategy_net"] = (
+            all_data["strategy"] - position_change_local * total_cost_rate
+    )
 
     return all_data
 
@@ -437,7 +452,7 @@ def multi_ticker_momentum_alpaca(tickers, start="2018-01-01", end="2025-11-01",
 portfolio_cum, summary, rolling_weights, leverage_factor = multi_ticker_momentum_alpaca(
     tickers=tickers,
     start="2018-01-01",
-    end="2025-11-03",
+    end="2025-11-16",
     max_ticker_weight=0.25,
     max_sector_weight=0.1,
     sector_map=sector_map,
