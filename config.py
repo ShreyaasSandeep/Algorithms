@@ -1,3 +1,4 @@
+import yfinance as yf
 API_KEY = "PKOYSXCCALC4OTPQ146W"
 API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
 BASE_URL = "https://paper-api.alpaca.markets/v2"
@@ -8,12 +9,12 @@ tickers = [
     "CAT", "T", "CVX"
 ]
 
-sector_map = {
-    "AAPL": "Technology", "MSFT": "Technology", "GOOG": "Communication Services",
-    "AMZN": "Consumer Discretionary", "JPM": "Financials", "JNJ": "Healthcare",
-    "XOM": "Energy", "UNH": "Healthcare", "PG": "Consumer Staples",
-    "NVDA": "Technology", "HD": "Consumer Discretionary", "V": "Financials",
-    "MA": "Financials", "PFE": "Healthcare", "BA": "Industrials",
-    "KO": "Consumer Staples", "PEP": "Consumer Staples", "CAT": "Industrials",
-    "T": "Communication Services", "CVX": "Energy"
-}
+sector_map = {}
+for t in tickers:
+    try:
+        info = yf.Ticker(t).info
+        sector_map[t] = info.get("sector", "Unknown")
+    except:
+        sector_map[t] = "Unknown"
+
+#print(sector_map)
