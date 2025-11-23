@@ -6,8 +6,8 @@ portfolio_cum, summary, weights, leverage = multi_ticker_momentum_alpaca(
     start="2018-01-01",
     end="2025-11-21",
     sector_map=sector_map,
-    max_ticker_weight=0.25,
-    max_sector_weight=0.1,
+    max_ticker_weight=0.1,
+    max_sector_weight=0.05,
     crisis_drawdown_threshold=-0.05,
     plot=True
 )
