@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.linear_model import SGDRegressor
 
 def rolling_sgd_predictions(df, features, target='next_open_return',
-                            window=252, alpha=0.01, retrain_interval=5):
+                            window=52, alpha=0.01, retrain_interval=5):
 
     df = df.copy()
     df['combined_signal'] = np.nan
