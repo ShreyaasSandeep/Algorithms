@@ -3,14 +3,7 @@ API_KEY = "PKOYSXCCALC4OTPQ146W"
 API_SECRET = "H8WojE6vXjVzwrW2CKSjXSomIJ5kyVBg5Gf9pS2o"
 BASE_URL = "https://paper-api.alpaca.markets/v2"
 
-#tickers = [
-#    "AAPL", "MSFT", "GOOG", "AMZN", "JPM", "JNJ", "XOM", "UNH",
-#    "PG", "NVDA", "HD", "V", "MA", "PFE", "BA", "KO", "PEP",
-#    "CAT", "T", "CVX"
-#]
-
 tickers = [
-    # Technology
     "AAPL","MSFT","GOOG","GOOGL","NVDA","IBM","ORCL","CSCO","HPQ","DELL",
     "ADBE","INTC","QCOM","TXN","MU","AMD","CRM","PYPL","INTU","AMAT",
     "WDAY","ADSK","FISV","NOW","APH", "META","NFLX","DIS","CMCSA","T","VZ",
