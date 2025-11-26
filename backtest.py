@@ -37,26 +37,37 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
 
 
     summary = compute_performance(portfolio_cum, benchmark=spy_cum)
-    bh = pd.DataFrame({
-        t: fetch_alpaca_data_batch([t], start, end).set_index('timestamp')['close'].pct_change()
-        for t in tickers
-    }).dropna()
+    bh = (
+    all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change()
+    ).dropna()
 
     bh_port = (1 + bh.mean(axis=1)).cumprod()
     summary_bh = compute_performance(bh_port)
     summary_spy = compute_performance(spy_cum)
 
+    quant = fetch_alpaca_data_batch(["DBMF"], start, end)
+    quant = quant[quant["symbol"] == "DBMF"]
+    quant = quant.rename(columns={"timestamp": "Date", "close": "Close"})
+    quant = quant.set_index("Date")
+    quant["returns"] = quant["Close"].pct_change()
+    quant_cum = (1 + quant["returns"]).cumprod()
+    summary_quant = compute_performance(quant_cum)
+
+
     if plot:
         df_plot = pd.DataFrame({
             "Momentum Portfolio": portfolio_cum,
             "Equal-Weight BH": bh_port,
-            "SPY Buy-and-Hold": spy_cum
+            "SPY Buy-and-Hold": spy_cum,
+            "DBMF Buy-and-Hold": quant_cum
+            
         })
-        df_plot.plot(figsize=(12, 6), logy=True, title="Momentum Portfolio vs BH vs SPY")
+        df_plot.plot(figsize=(12, 6), logy=True, title="Momentum Portfolio vs BH vs SPY vs DBMF")
         plt.show()
 
     print("Portfolio Summary:\n", summary)
     print("\nEqual-Weight BH Summary:\n", summary_bh)
     print("\nSPY Summary:\n", summary_spy)
+    print("\nDBMF Summary:\n", summary_quant)
 
     return portfolio_cum, summary, weights, leverage
