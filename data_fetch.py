@@ -20,17 +20,23 @@ def fetch_one(symbol, start, end, timeframe='1D'):
     return bars
 
 def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D',
-                            max_workers=8, cache_dir="cache"):
+                            max_workers=8, cache_dir="cache", cache_expiry_days=7):
     os.makedirs(cache_dir, exist_ok=True)
     start_str = pd.to_datetime(start).strftime('%Y-%m-%d')
     end_str = pd.to_datetime(end).strftime('%Y-%m-%d')
 
     cache_lock = threading.Lock()
 
+    def is_cache_valid(cache_file):
+        if not os.path.exists(cache_file):
+            return False
+        age_days = (pd.Timestamp.now() - pd.Timestamp(os.path.getmtime(cache_file))).days
+        return age_days < cache_expiry_days
+
     def task(ticker):
         cache_file = f"{cache_dir}/{ticker}_{start_str}_{end_str}_{timeframe}.pkl"
 
-        if os.path.exists(cache_file):
+        if is_cache_valid(cache_file):
             try:
                 obj = pickle.load(open(cache_file, "rb"))
                 if not obj.empty:
@@ -38,7 +44,7 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D',
             except Exception as e:
                 print(f"[{ticker}] failed to read cache, will refetch: {e}")
 
-        bars = fetch_one(ticker, start_str, end_str, timeframe = timeframe)
+        bars = fetch_one(ticker, start_str, end_str, timeframe=timeframe)
         if bars is None or bars.empty:
             return pd.DataFrame()
 
@@ -48,15 +54,17 @@ def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D',
 
         try:
             with cache_lock:
-                if not os.path.exists(cache_file):
-                    pickle.dump(bars, open(cache_file, "wb"))
+                tmp_file = cache_file + ".tmp"
+                with open(tmp_file, "wb") as f:
+                    pickle.dump(bars, f)
+                os.replace(tmp_file, cache_file)
         except Exception as e:
             print(f"[{ticker}] error writing cache: {e}")
 
         return bars
 
     all_data = []
-    error = {}
+    errors = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_ticker = {executor.submit(task, t): t for t in tickers}
