@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 def compute_performance(series, benchmark=None, freq=252):
     ret = series.pct_change().dropna()
