@@ -3,7 +3,7 @@ from backtest import multi_ticker_momentum_alpaca
 
 portfolio_cum, summary, weights, leverage = multi_ticker_momentum_alpaca(
     tickers=tickers,
-    start="2018-01-01",
+    start="2024-01-01",
     end="2026-01-12",
     sector_map=sector_map,
     max_ticker_weight=0.1,
