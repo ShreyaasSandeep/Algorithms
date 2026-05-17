@@ -3,7 +3,7 @@ import numpy as np
 from modelling import rolling_sgd_predictions
 from config import sector_map
 
-def apply_hysteresis(signal, upper=-0, lower=-0.04):
+def apply_hysteresis(signal, upper=0, lower=-0.04):
     pos = np.zeros(len(signal))
     for i in range(len(signal)):
         if i == 0:
