@@ -14,10 +14,12 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
                                  crisis_leverage_multiplier=0.2,
                                  plot=True):
 
+    #Fetching historical data for all tickers and computing signals
     all_data = fetch_alpaca_data_batch(tickers, start, end)
     all_data = compute_signals(all_data, target_vol=target_vol,
                                cost_rate=cost_rate, slippage_rate=slippage_rate)
 
+    #Constructing portfolio
     portfolio_cum, weights, leverage = construct_portfolio(
         all_data, tickers, sector_map,
         target_vol=target_vol, vol_lookback=vol_lookback,
@@ -28,6 +30,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
         crisis_leverage_multiplier=crisis_leverage_multiplier
     )
 
+    #Fetching SPY data for benchmark comparison
     spy = fetch_alpaca_data_batch(["SPY"], start, end)
     spy = spy[spy['symbol'] == "SPY"]
     spy = spy.rename(columns={"timestamp": "Date", "close": "Close"})
@@ -35,16 +38,21 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
     spy["returns"] = spy["Close"].pct_change()
     spy_cum = (1 + spy["returns"]).cumprod()
 
+    #Computing performance metrics for portfolio
+    summary = compute_performance(portfolio_cum)
 
-    summary = compute_performance(portfolio_cum, benchmark=spy_cum)
+    #Calculating returns under an equal-weight buy-and-hold strategy for comparison
     bh = (
     all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change()
     )
 
     bh_port = (1 + bh.mean(axis=1)).cumprod()
+
+    #Computing performance metrics for buy-and-hold strategy and SPY benchmark
     summary_bh = compute_performance(bh_port)
     summary_spy = compute_performance(spy_cum)
 
+    #Fetching DBMF data for additional benchmark comparison and computing performance metrics
     quant = fetch_alpaca_data_batch(["DBMF"], start, end)
     quant = quant[quant["symbol"] == "DBMF"]
     quant = quant.rename(columns={"timestamp": "Date", "close": "Close"})
@@ -53,7 +61,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
     quant_cum = (1 + quant["returns"]).cumprod()
     summary_quant = compute_performance(quant_cum)
 
-
+    #Plotting log-scale graph comparing portfolio performance against benchmarks to show relative performance
     if plot:
         df_plot = pd.DataFrame({
             "Momentum Portfolio": portfolio_cum,
@@ -65,6 +73,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
         df_plot.plot(figsize=(12, 6), logy=True, title="Momentum Portfolio vs BH vs SPY vs DBMF")
         plt.show()
 
+    #Printing performance summaries for portfolio and benchmarks
     print("Portfolio Summary:\n", summary)
     print("\nEqual-Weight BH Summary:\n", summary_bh)
     print("\nSPY Summary:\n", summary_spy)

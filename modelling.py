@@ -4,15 +4,18 @@ from sklearn.linear_model import SGDRegressor
 def rolling_sgd_predictions(df, features, target='next_open_return',
                             window=10, alpha=0.01, retrain_interval=3):
 
+    #Initialising predictions column
     df = df.copy()
     df['combined_signal'] = np.nan
 
+    #Looping through each symbol and generating rolling predictions
     for sym in df['symbol'].unique():
         sym_df = df[df['symbol'] == sym].copy()
         X = sym_df[features].values
         y = sym_df[target].values
         preds = []
 
+    #Initialising the model
         model = SGDRegressor(
             alpha=alpha,
             penalty='l2',
@@ -24,6 +27,7 @@ def rolling_sgd_predictions(df, features, target='next_open_return',
             random_state=42,
         )
 
+        #Training model at specified intervals and generating predictions
         for i in range(window, len(sym_df)):
             if (i - window) % retrain_interval == 0:
                 model.partial_fit(X[i - window:i], y[i - window:i])
