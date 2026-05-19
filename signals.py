@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from modelling import rolling_sgd_predictions
 from config import sector_map
+import talib
 
 def apply_hysteresis(signal, upper=0, lower=-0.04):
     pos = np.zeros(len(signal))
@@ -27,6 +28,26 @@ def enforce_min_holding(positions, min_hold=5):
             else:
                 last_change = i
     return final_pos
+
+def calculate_adx(group, period=7):
+        high = group['high'].values
+        low = group['low'].values
+        close = group['close'].values
+        
+        adx = talib.ADX(high, low, close, timeperiod=period)
+        
+        plus_di = talib.PLUS_DI(high, low, close, timeperiod=period)
+        minus_di = talib.MINUS_DI(high, low, close, timeperiod=period)
+        
+        adx_slope = talib.ROCR(adx, timeperiod=5) - 1
+        
+        return pd.DataFrame({
+            'ADX': adx,
+            'PLUS_DI': plus_di,
+            'MINUS_DI': minus_di,
+            'ADX_slope': adx_slope
+        }, index=group.index)
+
 
 def compute_signals(all_data, target_vol=0.5,
                     cost_rate=0.001, slippage_rate=0.0005):
@@ -60,6 +81,25 @@ def compute_signals(all_data, target_vol=0.5,
     roll_down = down.ewm(span=14, adjust = False).mean()
     RS = roll_up / (roll_down + 1e-8)
     df['RSI_signal'] = (100 - (100 / (1 + RS)) - 50) / 50
+
+    adx_features = df.groupby('symbol').apply(calculate_adx, period=7).reset_index(level=0, drop=True)
+    
+    df['ADX'] = adx_features['ADX']
+    df['PLUS_DI'] = adx_features['PLUS_DI']
+    df['MINUS_DI'] = adx_features['MINUS_DI']
+    df['ADX_slope'] = adx_features['ADX_slope']
+    df['ADX_normalized'] = df['ADX'] / 100.0
+    
+    df['ADX_regime'] = np.select(
+        [df['ADX'] < 20, df['ADX'] < 40, df['ADX'] >= 40],
+        [0, 1, 2],
+        default=1
+    )
+
+    di_diff = (df['PLUS_DI'] - df['MINUS_DI']) / (df['PLUS_DI'] + df['MINUS_DI'] + 1e-8)
+    df['DI_bias'] = np.tanh(di_diff)
+    
+    df['trend_signal'] = df['ADX_normalized'] * df['DI_bias']    
 
     df['SMA_200'] = df.groupby('symbol')['close'].transform(lambda x: x.rolling(200, min_periods=1).mean())
     df['EMA_200'] = df.groupby('symbol')['close'].transform(lambda x: x.ewm(span=200, adjust=False).mean())
@@ -108,7 +148,8 @@ def compute_signals(all_data, target_vol=0.5,
     features = [
         'signal_long', 'signal_short', 'RSI_signal',
         'weighted_filter', 'BB_zscore', 'volatility_ratio',
-        'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum'
+        'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
+        'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope'
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 

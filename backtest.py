@@ -39,7 +39,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
     summary = compute_performance(portfolio_cum, benchmark=spy_cum)
     bh = (
     all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change()
-    ).dropna()
+    )
 
     bh_port = (1 + bh.mean(axis=1)).cumprod()
     summary_bh = compute_performance(bh_port)
