@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Cache and local data
+cache/
+
+# Environment secrets
+.env
+
+# Version control
+.git/
+.gitignore
+
+# Docker files (optional)
+Dockerfile
+.dockerignore
+
+# OS files
+.DS_Store
