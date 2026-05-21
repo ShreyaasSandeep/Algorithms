@@ -12,14 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements.txt
 COPY requirements.txt .
 
-# Install ALL Python dependencies in a single RUN command
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire project
+# Copy project
 COPY backtest.py config.py data_fetch.py main.py modelling.py \
      portfolio.py signals.py utils.py README.txt ./
 

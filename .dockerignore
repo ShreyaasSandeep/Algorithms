@@ -17,7 +17,7 @@ cache/
 .git/
 .gitignore
 
-# Docker files (optional)
+# Docker files
 Dockerfile
 .dockerignore
 

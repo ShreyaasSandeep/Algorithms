@@ -1,15 +1,15 @@
 import yfinance as yf
 import os
 from dotenv import load_dotenv
+
 # Load environment variables
 load_dotenv()
 
-# Get credentials from environment
 API_KEY = os.getenv("ALPACA_API_KEY")
 API_SECRET = os.getenv("ALPACA_API_SECRET")
 BASE_URL = os.getenv("ALPACA_BASE_URL")
 
-# Optional: Check if keys loaded successfully
+#Check if keys loaded successfully
 if not API_KEY:
     print("Warning: API_KEY not found in environment variables")
 
@@ -29,6 +29,7 @@ tickers = [
     "SRE","WEC","XEL",
 ]
 
+#Generates a mapping of tickers to their respective sectors
 sector_map = {}
 for t in tickers:
     try:

@@ -82,8 +82,7 @@ def compute_signals(all_data, target_vol=0.5,
     RS = roll_up / (roll_down + 1e-8)
     df['RSI_signal'] = (100 - (100 / (1 + RS)) - 50) / 50
 
-    adx_features = df.groupby('symbol').apply(calculate_adx, period=7).reset_index(level=0, drop=True)
-    
+    adx_features = df.groupby('symbol').apply(calculate_adx, period=7, include_groups=False).reset_index(level=0, drop=True)    
     df['ADX'] = adx_features['ADX']
     df['PLUS_DI'] = adx_features['PLUS_DI']
     df['MINUS_DI'] = adx_features['MINUS_DI']

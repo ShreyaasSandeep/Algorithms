@@ -1,1 +1,1 @@
-This is simply an initial text file.
+This is a project for a multi-ticker momentum-based strategy.

@@ -43,7 +43,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
 
     #Calculating returns under an equal-weight buy-and-hold strategy for comparison
     bh = (
-    all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change()
+    all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change(fill_method=None)
     )
 
     bh_port = (1 + bh.mean(axis=1)).cumprod()
