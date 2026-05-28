@@ -4,6 +4,7 @@ from modelling import rolling_sgd_predictions
 from config import sector_map
 import talib
 
+#Hysteresis function to prevent frequent position changes
 def apply_hysteresis(signal, upper=0, lower=-0.04):
     pos = np.zeros(len(signal))
     for i in range(len(signal)):
@@ -18,6 +19,7 @@ def apply_hysteresis(signal, upper=0, lower=-0.04):
                 pos[i] = pos[i - 1]
     return pos
 
+#Enforce minimum holding period to reduce overtrading and transaction costs
 def enforce_min_holding(positions, min_hold=5):
     final_pos = positions.copy()
     last_change = 0
@@ -29,6 +31,7 @@ def enforce_min_holding(positions, min_hold=5):
                 last_change = i
     return final_pos
 
+#Calculate ADX and related features for trend strength and regime detection
 def calculate_adx(group, period=7):
         high = group['high'].values
         low = group['low'].values
@@ -52,6 +55,7 @@ def calculate_adx(group, period=7):
 def compute_signals(all_data, target_vol=0.5,
                     cost_rate=0.001, slippage_rate=0.0005):
 
+    #Prepare the DataFrame and calculate features
     df = all_data.copy().sort_values(['symbol', 'timestamp'])
 
     df['returns'] = df.groupby('symbol')['close'].pct_change()
@@ -152,6 +156,7 @@ def compute_signals(all_data, target_vol=0.5,
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 
+    #Generate signals using the rolling SGD model and apply execution lag
     df = rolling_sgd_predictions(df, features)
     df['combined_signal_for_execution'] = df.groupby('symbol')['combined_signal'].shift(1)
 
@@ -168,6 +173,7 @@ def compute_signals(all_data, target_vol=0.5,
 
     df['strategy'] = df['position_final'].shift(1) * (df['next_open'] / df['close'] - 1)
 
+    #Calculate transaction costs based on position changes and estimated spread
     est_spread = df.groupby("symbol")["returns"].transform(lambda x: x.rolling(5, min_periods=1).std()) * 0.5
     est_spread = est_spread.clip(lower=0.0001)
 

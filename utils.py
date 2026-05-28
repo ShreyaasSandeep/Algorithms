@@ -3,9 +3,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def compute_performance(series, benchmark=None, freq=252):
+    #Calculate returns and cumulative returns
     ret = series.pct_change().dropna()
     cumulative = (1 + ret).cumprod()
 
+    #Calculate performance metrics
     total_return = cumulative.iloc[-1] - 1
     cagr = cumulative.iloc[-1] ** (freq / len(ret)) - 1
     vol = ret.std() * np.sqrt(freq)
@@ -39,6 +41,7 @@ def compute_performance(series, benchmark=None, freq=252):
 
     beta = alpha = information_ratio = r2 = tracking_error = np.nan
     if benchmark is not None:
+        #Align returns with benchmark
         bench_ret = benchmark.pct_change().dropna()
         aligned = pd.concat([ret, bench_ret], axis=1, join="inner").dropna()
         aligned.columns = ["portfolio", "benchmark"]
