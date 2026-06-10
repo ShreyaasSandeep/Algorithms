@@ -71,6 +71,44 @@ def calculate_vcpm(group, correlation_period=8, volume_period=128):
         'vcpm_bearish': vcpm_bearish,
     }, index=group.index)
 
+def calculate_improved_costs(df, cost_rate=0.001, slippage_rate=0.0005):
+    """
+    More realistic transaction cost model with:
+    - Dynamic bid-ask spread estimation
+    - Market impact based on liquidity
+    - Volume-weighted costs
+    """
+    
+    df['estimated_spread_bps'] = ((df['high'] - df['low']) / df['close']) * 10000
+    
+    df['rolling_spread_bps'] = df.groupby('symbol')['estimated_spread_bps'].transform(
+        lambda x: x.rolling(20, min_periods=5).median()
+    )
+    df['rolling_spread_bps'] = df['rolling_spread_bps'].fillna(10.0)
+    
+    df['dollar_volume'] = df['close'] * df['volume']
+    df['liquidity_percentile'] = df.groupby('timestamp')['dollar_volume'].rank(pct=True)
+
+    df['market_impact_bps'] = 0.5 + (1 - df['liquidity_percentile']) * 2.0
+    
+    df['volatility_adj'] = df['parkinson_vol'] / np.sqrt(252)  # Convert to daily vol
+    df['volatility_adj'] = (df['volatility_adj'] / 0.01).clip(0.5, 3.0)
+    
+    df['spread_cost'] = (df['rolling_spread_bps'] / 10000) * df['volatility_adj']
+    df['impact_cost'] = (df['market_impact_bps'] / 10000) * df['volatility_adj']
+    
+    df['base_commission'] = cost_rate
+    df['base_slippage'] = slippage_rate
+
+    df['total_cost_rate'] = (
+        df['base_commission'] +
+        df['base_slippage'] +
+        df['spread_cost'] * 0.5 +
+        df['impact_cost']
+    ).clip(0.0001, 0.02)
+    
+    return df
+
 
 def compute_signals(all_data, target_vol=0.5,
                     cost_rate=0.001, slippage_rate=0.0005):
@@ -142,14 +180,11 @@ def compute_signals(all_data, target_vol=0.5,
     df['BB_lower'] = df['SMA_BB'] - bb_k * df['STD_BB']
     df['BB_zscore'] = (df['close'] - df['SMA_BB']) / (df['STD_BB'] + 1e-8)
 
-    # Calculate Hilbert Transform components per symbol
     def calculate_hilbert(group):
         close_prices = group['close'].values
         
-        # Instantaneous trend line (predicts where price is heading)
         ht_trendline = talib.HT_TRENDLINE(close_prices)
         
-        # Trend mode: 0 = Cyclical/Choppy, 1 = Strong Trend
         ht_trendmode = talib.HT_TRENDMODE(close_prices)
         
         return pd.DataFrame({
@@ -157,25 +192,21 @@ def compute_signals(all_data, target_vol=0.5,
             'HT_Trendmode': ht_trendmode,
         }, index=group.index)
 
-    # Apply Hilbert transform to each symbol
     hilbert_features = df.groupby('symbol', group_keys=False).apply(calculate_hilbert)
     df['HT_Trendline'] = hilbert_features['HT_Trendline']
     df['HT_Trendmode'] = hilbert_features['HT_Trendmode']
 
-    # Create a regime confidence score (0 to 1)
     df['trend_regime_confidence'] = np.where(
         df['HT_Trendmode'] == 1,
         0.6 + (df['ADX_normalized'] * 0.3),
         0.2
     )
 
-    # Detect trend exhaustion: Price crossing below HT_Trendline signals trend weakening
     df['trend_exhaustion'] = (
         (df['close'] < df['HT_Trendline']) & 
         (df['close'].shift(1) >= df['HT_Trendline'].shift(1))
     ).astype(int)
 
-    # Detect trend initiation: Price crossing above HT_Trendline
     df['trend_initiation'] = (
         (df['close'] > df['HT_Trendline']) & 
         (df['close'].shift(1) <= df['HT_Trendline'].shift(1))
@@ -253,12 +284,12 @@ def compute_signals(all_data, target_vol=0.5,
     df['strategy'] = df['position_final'].shift(1) * (df['next_open'] / df['close'] - 1)
 
     #Calculate transaction costs based on position changes and estimated spread
-    est_spread = df.groupby("symbol")["returns"].transform(lambda x: x.rolling(5, min_periods=1).std()) * 0.5
-    est_spread = est_spread.clip(lower=0.0001)
-
-    total_cost = cost_rate + slippage_rate + est_spread
+    df = calculate_improved_costs(df, cost_rate, slippage_rate)
+    
+    # Calculate position changes for cost application
     pos_change = df.groupby("symbol")["position_final"].diff().abs()
-
-    df['strategy_net'] = df['strategy'] - pos_change * total_cost
+    
+    # Apply costs using improved cost rate
+    df['strategy_net'] = df['strategy'] - pos_change * df['total_cost_rate']
 
     return df
