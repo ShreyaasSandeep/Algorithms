@@ -145,6 +145,10 @@ def compute_signals(all_data, target_vol=0.5,
         lambda x: x.rank(pct=True)
     )
 
+    df['efficiency_ratio'] = df.groupby('symbol')['close'].transform(
+    lambda x: abs(x - x.shift(20)) / (abs(x.diff()).rolling(20).sum() + 1e-8)
+    )
+
     df['next_open'] = df.groupby('symbol')['open'].shift(-1)
     df['next_open_return'] = df['next_open'] / df['close'] - 1 
 
@@ -152,7 +156,8 @@ def compute_signals(all_data, target_vol=0.5,
         'signal_long', 'signal_short', 'RSI_signal',
         'weighted_filter', 'BB_zscore', 'volatility_ratio',
         'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
-        'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope'
+        'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope',
+        'efficiency_ratio'
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 
