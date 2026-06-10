@@ -142,9 +142,6 @@ def compute_signals(all_data, target_vol=0.5,
     df['BB_lower'] = df['SMA_BB'] - bb_k * df['STD_BB']
     df['BB_zscore'] = (df['close'] - df['SMA_BB']) / (df['STD_BB'] + 1e-8)
 
-    # ============================================================
-    # HILBERT TRANSFORM - Market Regime Detection
-    # ============================================================
     # Calculate Hilbert Transform components per symbol
     def calculate_hilbert(group):
         close_prices = group['close'].values
@@ -155,14 +152,9 @@ def compute_signals(all_data, target_vol=0.5,
         # Trend mode: 0 = Cyclical/Choppy, 1 = Strong Trend
         ht_trendmode = talib.HT_TRENDMODE(close_prices)
         
-        # Optional: Hilbert Transform Sine Wave (phase prediction)
-        # ht_sine, ht_leadsine = talib.HT_SINE(close_prices)
-        
         return pd.DataFrame({
             'HT_Trendline': ht_trendline,
             'HT_Trendmode': ht_trendmode,
-            # 'HT_Sine': ht_sine,
-            # 'HT_LeadSine': ht_leadsine
         }, index=group.index)
 
     # Apply Hilbert transform to each symbol
@@ -171,12 +163,10 @@ def compute_signals(all_data, target_vol=0.5,
     df['HT_Trendmode'] = hilbert_features['HT_Trendmode']
 
     # Create a regime confidence score (0 to 1)
-    # When HT_Trendmode = 1 (trending), confidence = 0.8 + ADX contribution
-    # When HT_Trendmode = 0 (choppy), confidence = 0.2
     df['trend_regime_confidence'] = np.where(
         df['HT_Trendmode'] == 1,
-        0.6 + (df['ADX_normalized'] * 0.3),  # Max 0.9 when ADX high
-        0.2  # Low confidence in choppy markets
+        0.6 + (df['ADX_normalized'] * 0.3),
+        0.2
     )
 
     # Detect trend exhaustion: Price crossing below HT_Trendline signals trend weakening
