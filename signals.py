@@ -149,6 +149,9 @@ def compute_signals(all_data, target_vol=0.5,
     lambda x: abs(x - x.shift(20)) / (abs(x.diff()).rolling(20).sum() + 1e-8)
     )
 
+    df['parkinson_vol'] = np.sqrt((1/(4*np.log(2))) * 
+    (df.groupby('symbol')['high'].transform(lambda x: np.log(x / x.shift()))**2).rolling(20).mean() * 252)
+
     df['next_open'] = df.groupby('symbol')['open'].shift(-1)
     df['next_open_return'] = df['next_open'] / df['close'] - 1 
 
@@ -157,7 +160,7 @@ def compute_signals(all_data, target_vol=0.5,
         'weighted_filter', 'BB_zscore', 'volatility_ratio',
         'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
         'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope',
-        'efficiency_ratio'
+        'efficiency_ratio', 'parkinson_vol'
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 
@@ -169,7 +172,8 @@ def compute_signals(all_data, target_vol=0.5,
     df['position_filtered'] = df['position_hysteresis'] * df['weighted_filter']
 
     realised_vol = df.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
-    scaling = (target_vol / realised_vol).clip(0, 3)
+    # Replace realised_vol with parkinson_vol for scaling
+    scaling = (target_vol / df['parkinson_vol'].fillna(target_vol)).clip(0, 3)
     df['position_final'] = df['position_filtered'] * scaling
 
     df['position_final'] = df.groupby('symbol')['position_final'].transform(
