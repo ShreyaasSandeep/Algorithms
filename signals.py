@@ -51,6 +51,26 @@ def calculate_adx(group, period=7):
             'ADX_slope': adx_slope
         }, index=group.index)
 
+def calculate_vcpm(group, correlation_period=8, volume_period=128):
+    """Volume-Confirmed Price Momentum - with safety bounds"""
+    returns = group['close'].pct_change()
+    volume_ratio = group['volume'] / (group['volume'].rolling(volume_period, min_periods=10).mean() + 1e-8)
+    volume_ratio = volume_ratio.clip(0.1, 5)  # Tighter bounds
+    
+    # Rolling correlation with error handling
+    price_vol_corr = returns.rolling(correlation_period, min_periods=5).corr(volume_ratio)
+    price_vol_corr = price_vol_corr.clip(-1, 1).fillna(0)
+    
+    # VCPM signal
+    vcpm_bullish = ((price_vol_corr > 0.5) & (volume_ratio > 0.8)).astype(int)
+    vcpm_bearish = ((price_vol_corr < -0.5) & (volume_ratio > 0.8)).astype(int)
+    
+    return pd.DataFrame({
+        'vcpm_correlation': price_vol_corr,
+        'vcpm_bullish': vcpm_bullish,
+        'vcpm_bearish': vcpm_bearish,
+    }, index=group.index)
+
 
 def compute_signals(all_data, target_vol=0.5,
                     cost_rate=0.001, slippage_rate=0.0005):
@@ -122,6 +142,55 @@ def compute_signals(all_data, target_vol=0.5,
     df['BB_lower'] = df['SMA_BB'] - bb_k * df['STD_BB']
     df['BB_zscore'] = (df['close'] - df['SMA_BB']) / (df['STD_BB'] + 1e-8)
 
+    # ============================================================
+    # HILBERT TRANSFORM - Market Regime Detection
+    # ============================================================
+    # Calculate Hilbert Transform components per symbol
+    def calculate_hilbert(group):
+        close_prices = group['close'].values
+        
+        # Instantaneous trend line (predicts where price is heading)
+        ht_trendline = talib.HT_TRENDLINE(close_prices)
+        
+        # Trend mode: 0 = Cyclical/Choppy, 1 = Strong Trend
+        ht_trendmode = talib.HT_TRENDMODE(close_prices)
+        
+        # Optional: Hilbert Transform Sine Wave (phase prediction)
+        # ht_sine, ht_leadsine = talib.HT_SINE(close_prices)
+        
+        return pd.DataFrame({
+            'HT_Trendline': ht_trendline,
+            'HT_Trendmode': ht_trendmode,
+            # 'HT_Sine': ht_sine,
+            # 'HT_LeadSine': ht_leadsine
+        }, index=group.index)
+
+    # Apply Hilbert transform to each symbol
+    hilbert_features = df.groupby('symbol', group_keys=False).apply(calculate_hilbert)
+    df['HT_Trendline'] = hilbert_features['HT_Trendline']
+    df['HT_Trendmode'] = hilbert_features['HT_Trendmode']
+
+    # Create a regime confidence score (0 to 1)
+    # When HT_Trendmode = 1 (trending), confidence = 0.8 + ADX contribution
+    # When HT_Trendmode = 0 (choppy), confidence = 0.2
+    df['trend_regime_confidence'] = np.where(
+        df['HT_Trendmode'] == 1,
+        0.6 + (df['ADX_normalized'] * 0.3),  # Max 0.9 when ADX high
+        0.2  # Low confidence in choppy markets
+    )
+
+    # Detect trend exhaustion: Price crossing below HT_Trendline signals trend weakening
+    df['trend_exhaustion'] = (
+        (df['close'] < df['HT_Trendline']) & 
+        (df['close'].shift(1) >= df['HT_Trendline'].shift(1))
+    ).astype(int)
+
+    # Detect trend initiation: Price crossing above HT_Trendline
+    df['trend_initiation'] = (
+        (df['close'] > df['HT_Trendline']) & 
+        (df['close'].shift(1) <= df['HT_Trendline'].shift(1))
+    ).astype(int)
+
     eps = 1e-8
     vol_lookback_mean = 20
     vol_lookback_std = 20
@@ -152,27 +221,38 @@ def compute_signals(all_data, target_vol=0.5,
     df['parkinson_vol'] = np.sqrt((1/(4*np.log(2))) * 
     (df.groupby('symbol')['high'].transform(lambda x: np.log(x / x.shift()))**2).rolling(20).mean() * 252)
 
+    df['cmf'] = df.groupby('symbol').apply(
+    lambda g: (g['volume'] * (2 * g['close'] - g['high'] - g['low']) / 
+               (g['high'] - g['low'] + 1e-8)).rolling(20).sum() / 
+              g['volume'].rolling(20).sum()
+    ).reset_index(level=0, drop=True)
+
+    vcpm_features = df.groupby('symbol').apply(calculate_vcpm, include_groups=False).reset_index(level=0, drop=True)
+    df['vcpm_correlation'] = vcpm_features['vcpm_correlation']
+    df['vcpm_bullish'] = vcpm_features['vcpm_bullish']
+    df['vcpm_bearish'] = vcpm_features['vcpm_bearish']
+
     df['next_open'] = df.groupby('symbol')['open'].shift(-1)
     df['next_open_return'] = df['next_open'] / df['close'] - 1 
 
     features = [
-        'signal_long', 'signal_short', 'RSI_signal',
-        'weighted_filter', 'BB_zscore', 'volatility_ratio',
-        'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
+        'signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore', 
+        'volatility_ratio', 'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
         'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope',
-        'efficiency_ratio', 'parkinson_vol'
+        'efficiency_ratio', 'parkinson_vol', 'cmf', 'vcpm_correlation', 'vcpm_bullish', 
+        'vcpm_bearish', 'HT_Trendmode', 'trend_regime_confidence', 'trend_exhaustion', 
+        'trend_initiation'
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 
     #Generate signals using the rolling SGD model and apply execution lag
     df = rolling_sgd_predictions(df, features)
+
     df['combined_signal_for_execution'] = df.groupby('symbol')['combined_signal'].shift(1)
 
     df['position_hysteresis'] = df.groupby('symbol')['combined_signal_for_execution'].transform(lambda x: apply_hysteresis(x.values))
     df['position_filtered'] = df['position_hysteresis'] * df['weighted_filter']
 
-    realised_vol = df.groupby('symbol')['returns'].transform(lambda x: x.rolling(20, min_periods=1).std() * np.sqrt(252))
-    # Replace realised_vol with parkinson_vol for scaling
     scaling = (target_vol / df['parkinson_vol'].fillna(target_vol)).clip(0, 3)
     df['position_final'] = df['position_filtered'] * scaling
 
