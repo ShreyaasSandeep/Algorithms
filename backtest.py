@@ -27,7 +27,12 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
         max_sector_weight=max_sector_weight,
         max_leverage=max_leverage,
         crisis_drawdown_threshold=crisis_drawdown_threshold,
-        crisis_leverage_multiplier=crisis_leverage_multiplier
+        crisis_leverage_multiplier=crisis_leverage_multiplier,
+        use_peak_to_trough=True,
+        use_multi_asset_crisis=True,
+        crisis_assets=['SPY', 'TLT', 'GLD', 'HYG', 'VXX'],
+        min_assets_in_crisis=5
+
     )
 
     #Fetching SPY data for benchmark comparison
@@ -39,18 +44,18 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
     spy_cum = (1 + spy["returns"]).cumprod()
 
     #Computing performance metrics for portfolio
-    summary = compute_performance(portfolio_cum)
+    summary = compute_performance(portfolio_cum, benchmark=spy_cum)
 
     #Calculating returns under an equal-weight buy-and-hold strategy for comparison
     bh = (
-    all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change()
+    all_data.pivot(index="timestamp", columns="symbol", values="close").pct_change(fill_method=None)
     )
 
     bh_port = (1 + bh.mean(axis=1)).cumprod()
 
     #Computing performance metrics for buy-and-hold strategy and SPY benchmark
-    summary_bh = compute_performance(bh_port)
-    summary_spy = compute_performance(spy_cum)
+    summary_bh = compute_performance(bh_port, benchmark=spy_cum)
+    summary_spy = compute_performance(spy_cum, benchmark=spy_cum)
 
     #Fetching DBMF data for additional benchmark comparison and computing performance metrics
     quant = fetch_alpaca_data_batch(["DBMF"], start, end)
@@ -59,7 +64,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
     quant = quant.set_index("Date")
     quant["returns"] = quant["Close"].pct_change()
     quant_cum = (1 + quant["returns"]).cumprod()
-    summary_quant = compute_performance(quant_cum)
+    summary_quant = compute_performance(quant_cum, benchmark=spy_cum)
 
     #Plotting log-scale graph comparing portfolio performance against benchmarks to show relative performance
     if plot:

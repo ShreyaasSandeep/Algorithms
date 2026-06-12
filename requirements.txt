@@ -1,0 +1,9 @@
+pandas
+matplotlib
+yfinance
+python-dotenv
+alpaca-trade-api>=2.0.0
+numpy
+scikit-learn
+TA-Lib
+alpha_vantage>=1.0
