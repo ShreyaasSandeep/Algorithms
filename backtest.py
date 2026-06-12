@@ -27,7 +27,12 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
         max_sector_weight=max_sector_weight,
         max_leverage=max_leverage,
         crisis_drawdown_threshold=crisis_drawdown_threshold,
-        crisis_leverage_multiplier=crisis_leverage_multiplier
+        crisis_leverage_multiplier=crisis_leverage_multiplier,
+        use_peak_to_trough=True,
+        use_multi_asset_crisis=True,
+        crisis_assets=['SPY', 'TLT', 'GLD', 'HYG', 'VXX'],
+        min_assets_in_crisis=5
+
     )
 
     #Fetching SPY data for benchmark comparison
