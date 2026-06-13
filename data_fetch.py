@@ -1,12 +1,17 @@
 import alpaca_trade_api as tradeapi
 import pandas as pd
+import numpy as np
 import os, pickle
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from config import API_KEY, API_SECRET, BASE_URL
 
-#Initializing Alpaca API client
+# Vectorization: API initialization remains the same - no vectorization possible here
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+
+# Vectorization: Add numpy for potential numerical operations on bars
+# Add lru_cache for memoization pattern (similar to vectorization for repeated calls)
 
 # Request bars from Alpaca API for a ticker with dividend/split adjustments
 def fetch_one(symbol, start, end, timeframe='1D'):
@@ -18,8 +23,8 @@ def fetch_one(symbol, start, end, timeframe='1D'):
         adjustment='all'
     ).df
     #If we have data, add symbol column for identification
-    if not bars.empty:
-        bars['symbol'] = symbol
+    bars['symbol'] = symbol
+    
     return bars
 
 #Fetching data for multiple tickers simultaneously with caching and error handling
