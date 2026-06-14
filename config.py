@@ -1,5 +1,6 @@
 import yfinance as yf
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -8,10 +9,13 @@ load_dotenv()
 API_KEY = os.getenv("ALPACA_API_KEY")
 API_SECRET = os.getenv("ALPACA_API_SECRET")
 BASE_URL = os.getenv("ALPACA_BASE_URL")
+FRED_API_KEY = os.getenv("FRED_API_KEY")
 
 #Check if keys loaded successfully
 if not API_KEY:
     print("Warning: API_KEY not found in environment variables")
+if not FRED_API_KEY:
+    print("Warning: FRED_API_KEY not found in environment variables")
 
 tickers = [
     "AAPL","MSFT","GOOG","GOOGL","NVDA","IBM","ORCL","CSCO","HPQ","DELL",
@@ -29,12 +33,17 @@ tickers = [
     "SRE","WEC","XEL",
 ]
 
-#Generates a mapping of tickers to their respective sectors
 sector_map = {}
-for t in tickers:
-    try:
-        info = yf.Ticker(t).info
-        sector_map[t] = info.get("sector", "Unknown")
-    except:
-        sector_map[t] = "Unknown"
 
+def get_sector_info(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        return ticker, info.get("sector", "Unknown")
+    except:
+        return ticker, "Unknown"
+
+with ThreadPoolExecutor(max_workers=20) as executor:
+    futures = {executor.submit(get_sector_info, t): t for t in tickers}
+    for future in as_completed(futures):
+        ticker, sector = future.result()
+        sector_map[ticker] = sector

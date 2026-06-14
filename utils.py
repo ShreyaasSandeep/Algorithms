@@ -1,11 +1,74 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import requests
+from config import FRED_API_KEY
 
-def compute_performance(series, benchmark=None, freq=252):
+def get_fred_data(series_id='DGS3MO', api_key=FRED_API_KEY, start_date=None, end_date=None):
+    """Direct FRED API call - works with any Python version"""
+    url = f"https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": api_key,
+        "file_type": "json",
+        "observation_start": start_date,
+        "observation_end": end_date,
+    }
+    
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    # Parse into DataFrame
+    observations = []
+    for obs in data["observations"]:
+        if obs["value"] != ".":
+            observations.append({
+                "date": pd.to_datetime(obs["date"]).strftime('%Y-%m-%d'),
+                "rate": float(obs["value"]) / 100
+            })
+    
+    df = pd.DataFrame(observations)
+    df = df.set_index("date").sort_index()
+    return df["rate"]
+
+def sharpe_ratio(strategy_returns, risk_free_series_id='DGS3MO', api_key=FRED_API_KEY, periods_per_year=252):
+    """
+    Calculate annual Sharpe ratio using FRED data for risk-free rate
+    
+    Parameters:
+    - strategy_returns: pandas Series of strategy returns (indexed by date)
+    - risk_free_series_id: FRED series ID for risk-free rate (e.g., 'DGS3MO' for 3-month Treasury)
+    - api_key: FRED API key
+    - periods_per_year: 252 for daily, 12 for monthly, 52 for weekly
+    
+    Returns:
+    - Annual Sharpe ratio (float)
+    """
+    strategy_returns_copy = strategy_returns.copy()
+    strategy_returns_copy.index = strategy_returns_copy.index.strftime('%Y-%m-%d')
+
+    start_date = strategy_returns_copy.index[0]
+    end_date = strategy_returns_copy.index[-1]
+    
+    risk_free_rates = get_fred_data(risk_free_series_id, api_key, start_date, end_date)
+    
+    # Align risk-free rates to strategy returns dates
+    aligned_risk_free = risk_free_rates.reindex(strategy_returns_copy.index, method='ffill')
+    
+    # Convert annual risk-free rate to per-period rate
+    risk_free_per_period = (1 + aligned_risk_free) ** (1/periods_per_year) - 1
+    
+    # Calculate excess returns and Sharpe ratio
+    excess_returns = strategy_returns_copy - risk_free_per_period
+    sharpe_daily = excess_returns.mean() / excess_returns.std()
+    
+    # Annualize and return
+    return sharpe_daily * (periods_per_year ** 0.5)
+
+def compute_performance(start_date, end_date, series, benchmark=None, freq=252):
     #Calculate returns and cumulative returns
     ret = series.pct_change().dropna()
     cumulative = (1 + ret).cumprod()
+    
 
     #Calculate performance metrics
     total_return = cumulative.iloc[-1] - 1
@@ -20,7 +83,7 @@ def compute_performance(series, benchmark=None, freq=252):
 
     downside = ret[ret < 0]
     downside_vol = downside.std() * np.sqrt(freq)
-    sharpe = cagr / vol if vol != 0 else np.nan
+    sharpe = sharpe_ratio(ret, periods_per_year=freq)
     sortino = cagr / downside_vol if downside_vol != 0 else np.nan
     calmar = cagr / max_dd if max_dd != 0 else np.nan
 
