@@ -257,12 +257,14 @@ def compute_signals(all_data, target_vol=0.5,
     df['next_open_return'] = df['next_open'] / df['close'] - 1 
 
     features = [
-        'signal_long', 'signal_short', 'RSI_signal', 'weighted_filter', 'BB_zscore', 
-        'volatility_ratio', 'volume_spike_rank', 'rank_momentum', 'sector_rank_momentum',
-        'ADX_normalized', 'ADX_regime', 'DI_bias', 'trend_signal', 'ADX_slope',
-        'efficiency_ratio', 'parkinson_vol', 'cmf', 'vcpm_correlation', 'vcpm_bullish', 
-        'vcpm_bearish', 'HT_Trendmode', 'trend_regime_confidence', 'trend_exhaustion', 
-        'trend_initiation'
+        'rank_momentum',           # Core momentum (most important)
+        'sector_rank_momentum',    # Sector-relative (diversification)
+        'efficiency_ratio',        # Trend quality (filters noise)
+        'parkinson_vol',           # Risk adjustment (critical)
+        'cmf',                     # Money flow (confirms momentum)
+        'BB_zscore',               # Mean reversion (contrarian signal)
+        'ADX_normalized',          # Trend strength
+        'HT_Trendmode',            # Cycle regime (helps timing)
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 

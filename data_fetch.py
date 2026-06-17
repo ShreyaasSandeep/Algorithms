@@ -25,7 +25,7 @@ def fetch_one(symbol, start, end, timeframe='1D'):
 
 #Fetching data for multiple tickers simultaneously with caching and error handling
 def fetch_alpaca_data_batch(tickers, start, end, timeframe='1D',
-                            max_workers=8, cache_dir="cache", cache_expiry_days=7):
+                            max_workers=6, cache_dir="cache", cache_expiry_days=7):
     #Ensuring cache directory exists
     os.makedirs(cache_dir, exist_ok=True)
     #Formatting start and end dates for cache file naming
