@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from data_fetch import fetch_alpaca_data_batch
 
-def get_spy_drawdown(start_date, end_date, rolling_weights_index, crisis_drawdown_threshold=-0.05):
+def get_spy_drawdown(start_date, end_date, rolling_weights_index, crisis_drawdown_threshold=-0.1):
         """Function to get crisis indicator"""
         
         # Cache implementation

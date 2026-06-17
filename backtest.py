@@ -11,7 +11,7 @@ def multi_ticker_momentum_alpaca(tickers, start, end,
                                  vol_lookback=20, max_ticker_weight=0.25,
                                  max_sector_weight=0.1, max_leverage=2.0,
                                  crisis_drawdown_threshold=-0.10,
-                                 crisis_leverage_multiplier=0.2,
+                                 crisis_leverage_multiplier=0.5,
                                  plot=True):
 
     #Fetching historical data for all tickers and computing signals
