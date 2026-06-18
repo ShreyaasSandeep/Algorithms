@@ -109,7 +109,6 @@ def calculate_improved_costs(df, cost_rate=0.001, slippage_rate=0.0005):
     
     return df
 
-
 def compute_signals(all_data, target_vol=0.5,
                     cost_rate=0.001, slippage_rate=0.0005):
 
@@ -257,14 +256,14 @@ def compute_signals(all_data, target_vol=0.5,
     df['next_open_return'] = df['next_open'] / df['close'] - 1 
 
     features = [
-        'rank_momentum',           # Core momentum (most important)
-        'sector_rank_momentum',    # Sector-relative (diversification)
-        'efficiency_ratio',        # Trend quality (filters noise)
-        'parkinson_vol',           # Risk adjustment (critical)
-        'cmf',                     # Money flow (confirms momentum)
-        'BB_zscore',               # Mean reversion (contrarian signal)
+        'rank_momentum',           # Core momentum
+        'sector_rank_momentum',    # Sector relative
+        'efficiency_ratio',        # Trend quality
+        'parkinson_vol',           # Risk adjustment
+        'cmf',                     # Money flow
+        'BB_zscore',               # Mean reversion
         'ADX_normalized',          # Trend strength
-        'HT_Trendmode',            # Cycle regime (helps timing)
+        'HT_Trendmode'             # Cycle regime
     ]
     df = df.dropna(subset=features + ['next_open_return']).copy()
 
